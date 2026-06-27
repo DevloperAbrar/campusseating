@@ -1,0 +1,129 @@
+campusseating/
+├── server/
+│   ├── src/
+│   │   ├── config/
+│   │   │   ├── db.js
+│   │   │   └── constants.js
+│   │   ├── models/
+│   │   │   ├── Stream.model.js
+│   │   │   ├── Department.model.js
+│   │   │   ├── Branch.model.js
+│   │   │   ├── Student.model.js
+│   │   │   ├── Faculty.model.js
+│   │   │   ├── Room.model.js
+│   │   │   ├── Exam.model.js
+│   │   │   ├── Shift.model.js
+│   │   │   ├── SeatingAssignment.model.js
+│   │   │   ├── InvigilatorAssignment.model.js
+│   │   │   └── ActivityLog.model.js
+│   │   ├── controllers/
+│   │   │   ├── auth.controller.js
+│   │   │   ├── dashboard.controller.js
+│   │   │   ├── academic.controller.js
+│   │   │   ├── student.controller.js
+│   │   │   ├── faculty.controller.js
+│   │   │   ├── room.controller.js
+│   │   │   ├── exam.controller.js
+│   │   │   ├── seating.controller.js
+│   │   │   ├── pdf.controller.js
+│   │   │   └── lookup.controller.js
+│   │   ├── routes/
+│   │   │   ├── index.js
+│   │   │   ├── auth.routes.js
+│   │   │   ├── academic.routes.js
+│   │   │   ├── dashboard.routes.js
+│   │   │   ├── student.routes.js
+│   │   │   ├── faculty.routes.js
+│   │   │   ├── room.routes.js
+│   │   │   ├── exam.routes.js
+│   │   │   ├── seating.routes.js
+│   │   │   ├── pdf.routes.js
+│   │   │   └── lookup.routes.js
+│   │   ├── middleware/
+│   │   │   ├── auth.middleware.js
+│   │   │   ├── error.middleware.js
+│   │   │   └── upload.middleware.js
+│   │   ├── services/
+│   │   │   ├── seating.service.js
+│   │   │   ├── pdf.service.js
+│   │   │   └── csv.service.js
+│   │   ├── utils/
+│   │   │   ├── asyncHandler.js
+│   │   │   ├── ApiError.js
+│   │   │   ├── ApiResponse.js
+│   │   │   └── helpers.js
+│   │   └── index.js
+│   ├── uploads/
+│   ├── .env
+│   ├── .env.example
+│   ├── .gitignore
+│   ├── package.json
+│   └── server.js
+│
+├── client/
+│   ├── public/
+│   │   └── logo.png
+│   ├── src/
+│   │   ├── api/
+│   │   │   ├── axios.js
+│   │   │   └── index.js
+│   │   ├── components/
+│   │   │   ├── ui/
+│   │   │   │   ├── Button.jsx
+│   │   │   │   ├── Input.jsx
+│   │   │   │   ├── Modal.jsx
+│   │   │   │   ├── Table.jsx
+│   │   │   │   ├── Badge.jsx
+│   │   │   │   ├── Loader.jsx
+│   │   │   │   └── Toast.jsx
+│   │   │   ├── layout/
+│   │   │   │   ├── AdminLayout.jsx
+│   │   │   │   ├── ConfirmModal.jsx
+│   │   │   │   └── PublicLayout.jsx
+│   │   │   ├── room/
+│   │   │   │   ├── SeatGrid.jsx
+│   │   │   │   └── RoomForm.jsx
+│   │   │   ├── exam/
+│   │   │   │   ├── AlgorithmConfig.jsx
+│   │   │   │   ├── SeatingPreview.jsx
+│   │   │   │   └── InvigilatorAssigner.jsx
+│   │   │   └── shared/
+│   │   │       ├── CSVUpload.jsx
+│   │   │       ├── ConfirmModal.jsx
+│   │   │       ├── Pagination.jsx
+│   │   │       └── StatCard.jsx
+│   │   ├── pages/
+│   │   │   ├── auth/
+│   │   │   │   └── Login.jsx
+│   │   │   ├── admin/
+│   │   │   │   ├── Dashboard.jsx
+│   │   │   │   ├── Academic.jsx
+│   │   │   │   ├── Students.jsx
+│   │   │   │   ├── Faculty.jsx
+│   │   │   │   ├── Rooms.jsx
+│   │   │   │   ├── Exams.jsx
+│   │   │   │   ├── ExamDetail.jsx
+│   │   │   │   └── SeatingPlan.jsx
+│   │   │   └── public/
+│   │   │       ├── StudentLookup.jsx
+│   │   │       └── FacultyLookup.jsx
+│   │   ├── store/
+│   │   │   └── index.js
+│   │   ├── hooks/
+│   │   │   └── index.js
+│   │   ├── utils/
+│   │   │   └── index.js
+│   │   ├── router/
+│   │   │   └── AppRouter.jsx
+│   │   ├── styles/
+│   │   │   └── index.css
+│   │   ├── App.jsx
+│   │   └── main.jsx
+│   ├── .env
+│   ├── .gitignore
+│   ├── tailwind.config.js
+│   ├── vite.config.js
+│   └── package.json
+│
+├── .gitignore
+└── README.md
