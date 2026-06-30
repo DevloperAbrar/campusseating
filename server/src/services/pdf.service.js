@@ -380,23 +380,51 @@ const generateSeatLabelsHTML = (roomsData, variant = 'detailed') => {
 };
 
 // ── Puppeteer renderer ───────────────────────────────────────────────────────
-
-const htmlToPDF = async (html, landscape = false) => {
-  const browser = await puppeteer.launch({
+// Launches a browser once. No hardcoded path — uses Puppeteer's own
+// bundled/installed Chromium (set PUPPETEER_EXECUTABLE_PATH in .env
+// only if you specifically need to point at a system Chrome).
+const launchBrowser = async () => {
+  return puppeteer.launch({
     headless: "new",
-    executablePath: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
     args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-gpu"],
   });
-  const page = await browser.newPage();
-  await page.setContent(html, { waitUntil: "networkidle0" });
-  const pdf = await page.pdf({
-    format: "A4",
-    landscape,
-    printBackground: true,
-    margin: { top: "10mm", bottom: "10mm", left: "10mm", right: "10mm" },
-  });
-  await browser.close();
-  return pdf;
 };
 
-module.exports = { generateRoomChartHTML, generateFacultyDutyHTML, generateSeatLabelsHTML, htmlToPDF };
+// Renders one HTML string to PDF using an already-open browser.
+// Opens/closes only a PAGE (cheap), not a browser (expensive).
+const renderPDFOnBrowser = async (browser, html, landscape = false) => {
+  const page = await browser.newPage();
+  try {
+    await page.setContent(html, { waitUntil: "networkidle0" });
+    const pdf = await page.pdf({
+      format: "A4",
+      landscape,
+      printBackground: true,
+      margin: { top: "10mm", bottom: "10mm", left: "10mm", right: "10mm" },
+    });
+    return pdf;
+  } finally {
+    await page.close();
+  }
+};
+
+// Original single-shot helper — kept for single-room routes so they
+// don't need any changes. Launches, renders, closes — same as before.
+const htmlToPDF = async (html, landscape = false) => {
+  const browser = await launchBrowser();
+  try {
+    return await renderPDFOnBrowser(browser, html, landscape);
+  } finally {
+    await browser.close();
+  }
+};
+
+module.exports = {
+  generateRoomChartHTML,
+  generateFacultyDutyHTML,
+  generateSeatLabelsHTML,
+  htmlToPDF,
+  launchBrowser,
+  renderPDFOnBrowser,
+};

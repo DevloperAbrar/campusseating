@@ -1,4 +1,4 @@
-const { Archiver } = require("archiver");          // v8: named export, not default function
+const { ZipArchive } = require("archiver");     // v8: named export, not default function
 const { PDFDocument } = require("pdf-lib");         // for merging multiple PDFs into one
 const asyncHandler = require("../utils/asyncHandler");
 const ApiError = require("../utils/ApiError");
@@ -12,10 +12,18 @@ const {
   generateFacultyDutyHTML,
   generateSeatLabelsHTML,
   htmlToPDF,
+  launchBrowser,
+  renderPDFOnBrowser,
 } = require("../services/pdf.service");
 
 // ── Helper: create a zip archive ─────────────────────────────────────────────
-const createZip = () => new Archiver("zip", { zlib: { level: 6 } });
+const createZip = () => {
+  const archive = new ZipArchive({ zlib: { level: 6 } });
+  archive.on('error', (err) => {
+    console.error('Archive error (zip generation failed safely, not crashed):', err);
+  });
+  return archive;
+};
 
 // ── Helper: merge array of PDF Buffers into one PDF Buffer ───────────────────
 const mergePDFs = async (pdfBuffers) => {
@@ -70,11 +78,16 @@ const getAllRoomsPDF = asyncHandler(async (req, res) => {
   const archive = createZip();
   archive.pipe(res);
 
-  for (const room of rooms) {
-    const { assignments, invigilators } = await fetchRoomData(shiftId, room._id);
-    const html = generateRoomChartHTML(exam, shift, room, assignments, invigilators);
-    const pdf  = await htmlToPDF(html);
-    archive.append(pdf, { name: `${room.name.replace(/\s+/g, "_")}_chart.pdf` });
+  const browser = await launchBrowser();
+  try {
+    for (const room of rooms) {
+      const { assignments, invigilators } = await fetchRoomData(shiftId, room._id);
+      const html = generateRoomChartHTML(exam, shift, room, assignments, invigilators);
+      const pdf  = await renderPDFOnBrowser(browser, html);
+      archive.append(Buffer.from(pdf), { name: `${room.name.replace(/\s+/g, "_")}_chart.pdf` });
+    }
+  } finally {
+    await browser.close();
   }
 
   archive.finalize();
@@ -89,10 +102,15 @@ const getAllRoomsMergedPDF = asyncHandler(async (req, res) => {
   const rooms = await Room.find({ _id: { $in: shift.rooms.map((r) => r.room) } });
 
   const pdfBuffers = [];
-  for (const room of rooms) {
-    const { assignments, invigilators } = await fetchRoomData(shiftId, room._id);
-    const html = generateRoomChartHTML(exam, shift, room, assignments, invigilators);
-    pdfBuffers.push(await htmlToPDF(html));
+  const browser = await launchBrowser();
+  try {
+    for (const room of rooms) {
+      const { assignments, invigilators } = await fetchRoomData(shiftId, room._id);
+      const html = generateRoomChartHTML(exam, shift, room, assignments, invigilators);
+      pdfBuffers.push(await renderPDFOnBrowser(browser, html));
+    }
+  } finally {
+    await browser.close();
   }
 
   const merged = await mergePDFs(pdfBuffers);
@@ -135,20 +153,23 @@ const getAllSeatLabelsPDF = asyncHandler(async (req, res) => {
   const archive = createZip();
   archive.pipe(res);
 
-  for (const room of rooms) {
-    const { assignments } = await fetchRoomData(shiftId, room._id);
-    if (!assignments.length) continue;
-    const html = generateSeatLabelsHTML(room, assignments, variant);
-    const pdf  = await htmlToPDF(html);
-    archive.append(pdf, { name: `${room.name.replace(/\s+/g, "_")}_labels_${variant}.pdf` });
+  const browser = await launchBrowser();
+  try {
+    for (const room of rooms) {
+      const { assignments } = await fetchRoomData(shiftId, room._id);
+      if (!assignments.length) continue;
+      const html = generateSeatLabelsHTML(room, assignments, variant);
+      const pdf  = await renderPDFOnBrowser(browser, html);
+      archive.append(Buffer.from(pdf), { name: `${room.name.replace(/\s+/g, "_")}_labels_${variant}.pdf` });
+    }
+  } finally {
+    await browser.close();
   }
 
   archive.finalize();
 });
 
 // ── Seat Labels — all rooms merged into ONE PDF ───────────────────────────────
-// pdf.controller.js — only getAllSeatLabelsMergedPDF changes
-
 const getAllSeatLabelsMergedPDF = asyncHandler(async (req, res) => {
   const { examId, shiftId } = req.params;
   const variant = req.query.variant === "simple" ? "simple" : "detailed";
