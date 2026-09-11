@@ -137,6 +137,23 @@ export const pdfAPI = {
     }),
 }
 
+// ── SUPER ADMIN ───────────────────────────────────────────────────────────────
+export const superadminAPI = {
+  login: (data) => api.post('/superadmin/auth/login', data),
+  logout: () => api.post('/superadmin/auth/logout'),
+  stats: () => api.get('/superadmin/stats'),
+
+  listColleges: (params) => api.get('/superadmin/colleges', { params }),
+  getCollege: (id) => api.get(`/superadmin/colleges/${id}`),
+  createCollege: (data) => api.post('/superadmin/colleges', data),
+  renewCollege: (id, data) => api.post(`/superadmin/colleges/${id}/renew`, data),
+  resetPassword: (id, data) => api.post(`/superadmin/colleges/${id}/reset-password`, data),
+  suspendCollege: (id) => api.post(`/superadmin/colleges/${id}/suspend`),
+  terminateCollege: (id) => api.post(`/superadmin/colleges/${id}/terminate`),
+  reactivateCollege: (id) => api.post(`/superadmin/colleges/${id}/reactivate`),
+  generatePassword: () => api.get('/superadmin/generate-password'),
+}
+
 // ── PUBLIC LOOKUP ─────────────────────────────────────────────────────────────
 export const lookupAPI = {
   student: (enrollmentNo) => api.get(`/public/student/${enrollmentNo}`),

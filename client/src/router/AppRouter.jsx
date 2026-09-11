@@ -1,4 +1,5 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
+import { useEffect } from 'react'
 import useStore from '../store'
 
 import AdminLayout from '../components/layout/AdminLayout'
@@ -17,18 +18,35 @@ import SeatingPlan from '../pages/admin/SeatingPlan'
 import StudentLookup from '../pages/public/StudentLookup'
 import FacultyLookup from '../pages/public/FacultyLookup'
 
+import SuperAdminLogin from '../pages/superadmin/SuperAdminLogin'
+import SuperAdminLayout from '../pages/superadmin/SuperAdminLayout'
+import SuperAdminDashboard from '../pages/superadmin/SuperAdminDashboard'
+import Colleges from '../pages/superadmin/Colleges'
+import CollegeDetail from '../pages/superadmin/CollegeDetail'
+
 function RequireAuth({ children }) {
   const { admin, authLoading } = useStore()
-
-  if (authLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="w-6 h-6 border-2 border-navy border-t-transparent rounded-full animate-spin" />
-      </div>
-    )
-  }
-
+  if (authLoading) return <Spinner />
   return admin ? children : <Navigate to="/login" replace />
+}
+
+function RequireSuperAdmin({ children }) {
+  const { superAdmin, superAdminLoading, checkSuperAdmin } = useStore()
+
+  useEffect(() => {
+    if (superAdminLoading) checkSuperAdmin()
+  }, [])
+
+  if (superAdminLoading) return <Spinner />
+  return superAdmin ? children : <Navigate to="/superadmin/login" replace />
+}
+
+function Spinner() {
+  return (
+    <div className="min-h-screen flex items-center justify-center">
+      <div className="w-6 h-6 border-2 border-navy border-t-transparent rounded-full animate-spin" />
+    </div>
+  )
 }
 
 export default function AppRouter() {
@@ -40,7 +58,7 @@ export default function AppRouter() {
         <Route path="/lookup/faculty" element={<FacultyLookup />} />
       </Route>
 
-      {/* Auth */}
+      {/* Admin auth */}
       <Route path="/login" element={<Login />} />
 
       {/* Admin routes — protected */}
@@ -61,6 +79,24 @@ export default function AppRouter() {
         <Route path="exams" element={<Exams />} />
         <Route path="exams/:examId" element={<ExamDetail />} />
         <Route path="exams/:examId/seating" element={<SeatingPlan />} />
+      </Route>
+
+      {/* Super Admin auth */}
+      <Route path="/superadmin/login" element={<SuperAdminLogin />} />
+
+      {/* Super Admin routes — protected */}
+      <Route
+        path="/superadmin"
+        element={
+          <RequireSuperAdmin>
+            <SuperAdminLayout />
+          </RequireSuperAdmin>
+        }
+      >
+        <Route index element={<Navigate to="/superadmin/dashboard" replace />} />
+        <Route path="dashboard" element={<SuperAdminDashboard />} />
+        <Route path="colleges" element={<Colleges />} />
+        <Route path="colleges/:id" element={<CollegeDetail />} />
       </Route>
 
       {/* Redirects */}

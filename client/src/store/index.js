@@ -1,8 +1,8 @@
 import { create } from 'zustand'
-import { authAPI } from '../api'
+import { authAPI, superadminAPI } from '../api'
 
 const useStore = create((set, get) => ({
-  // ── Auth ──────────────────────────────────────────────────────────────────
+  // ── Admin Auth ────────────────────────────────────────────────────────────
   admin: null,
   authLoading: true,
 
@@ -26,6 +26,32 @@ const useStore = create((set, get) => ({
   logout: async () => {
     try { await authAPI.logout() } catch {}
     set({ admin: null })
+  },
+
+  // ── Super Admin Auth ──────────────────────────────────────────────────────
+  superAdmin: null,
+  superAdminLoading: true,
+
+  checkSuperAdmin: async () => {
+    // Super admin token is cookie-based just like admin
+    // We check by hitting stats — if 401, not logged in
+    try {
+      await superadminAPI.stats()
+      set({ superAdmin: { role: 'SUPER_ADMIN' }, superAdminLoading: false })
+    } catch {
+      set({ superAdmin: null, superAdminLoading: false })
+    }
+  },
+
+  superAdminLogin: async (email, password) => {
+    const res = await superadminAPI.login({ email, password })
+    set({ superAdmin: res.data.data })
+    return res.data
+  },
+
+  superAdminLogout: async () => {
+    try { await superadminAPI.logout() } catch {}
+    set({ superAdmin: null })
   },
 
   // ── UI state ──────────────────────────────────────────────────────────────
