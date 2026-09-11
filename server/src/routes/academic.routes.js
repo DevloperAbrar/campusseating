@@ -1,5 +1,4 @@
 const express = require("express");
-const { authMiddleware } = require("../middleware/auth.middleware");
 const { getDashboard } = require("../controllers/dashboard.controller");
 const {
   getStreams, createStream, updateStream, deleteStream,
@@ -8,7 +7,6 @@ const {
 } = require("../controllers/academic.controller");
 
 const router = express.Router();
-router.use(authMiddleware);
 
 // Streams
 router.get("/streams", getStreams);
@@ -30,7 +28,6 @@ router.delete("/branches/:id", deleteBranch);
 
 // Dashboard router (separate)
 const dashboardRouter = express.Router();
-dashboardRouter.use(authMiddleware);
 dashboardRouter.get("/", getDashboard);
 
 module.exports = { router, dashboardRouter };

@@ -3,34 +3,35 @@ const Papa = require("papaparse");
 const asyncHandler = require("../utils/asyncHandler");
 const ApiError = require("../utils/ApiError");
 const ApiResponse = require("../utils/ApiResponse");
-const Student = require("../models/Student.model");
-const Branch = require("../models/Branch.model");
-const Department = require("../models/Department.model");
-const Stream = require("../models/Stream.model");
-const ActivityLog = require("../models/ActivityLog.model");
+const { prisma } = require("../config/db");
 const { getPagination, buildPaginationMeta } = require("../utils/helpers");
 
 const getStudents = asyncHandler(async (req, res) => {
   const { page, limit, skip } = getPagination(req.query);
-  const filter = { isActive: true };
-  if (req.query.branch) filter.branch = req.query.branch;
-  if (req.query.department) filter.department = req.query.department;
-  if (req.query.year) filter.year = parseInt(req.query.year);
+  const where = { collegeId: req.collegeId, isActive: true };
+  if (req.query.branch) where.branchId = req.query.branch;
+  if (req.query.department) where.departmentId = req.query.department;
+  if (req.query.year) where.year = parseInt(req.query.year);
   if (req.query.search) {
-    filter.$or = [
-      { name: { $regex: req.query.search, $options: "i" } },
-      { enrollmentNo: { $regex: req.query.search, $options: "i" } },
-      { email: { $regex: req.query.search, $options: "i" } },
+    where.OR = [
+      { name: { contains: req.query.search, mode: "insensitive" } },
+      { enrollmentNo: { contains: req.query.search, mode: "insensitive" } },
+      { email: { contains: req.query.search, mode: "insensitive" } },
     ];
   }
+
   const [students, total] = await Promise.all([
-    Student.find(filter)
-      .populate("branch", "name code")
-      .populate("department", "name code")
-      .populate("stream", "name code")
-      .skip(skip).limit(limit).sort({ enrollmentNo: 1 }),
-    Student.countDocuments(filter),
+    prisma.student.findMany({
+      where, skip, take: limit, orderBy: { enrollmentNo: "asc" },
+      include: {
+        branch: { select: { name: true, code: true } },
+        department: { select: { name: true, code: true } },
+        stream: { select: { name: true, code: true } },
+      },
+    }),
+    prisma.student.count({ where }),
   ]);
+
   res.json(new ApiResponse(200, "Students fetched", students, buildPaginationMeta(total, page, limit)));
 });
 
@@ -39,20 +40,54 @@ const createStudent = asyncHandler(async (req, res) => {
   if (!name || !email || !enrollmentNo || !stream || !department || !branch || !year) {
     throw new ApiError(400, "Required fields missing");
   }
-  const student = await Student.create({ name, email, enrollmentNo, stream, department, branch, year, gender, phone, specialNeeds });
+
+  const student = await prisma.student.create({
+    data: {
+      collegeId: req.collegeId,
+      name,
+      email: email.toLowerCase(),
+      enrollmentNo,
+      streamId: stream,
+      departmentId: department,
+      branchId: branch,
+      year: Number(year),
+      gender: gender || "other",
+      phone: phone || "",
+      specialNeeds: specialNeeds || false,
+    },
+  });
+
   res.status(201).json(new ApiResponse(201, "Student created", student));
 });
 
 const updateStudent = asyncHandler(async (req, res) => {
-  const student = await Student.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true })
-    .populate("branch department stream", "name code");
-  if (!student) throw new ApiError(404, "Student not found");
+  const existing = await prisma.student.findFirst({ where: { id: req.params.id, collegeId: req.collegeId } });
+  if (!existing) throw new ApiError(404, "Student not found");
+
+  // Map frontend field names to Prisma field names
+  const data = { ...req.body };
+  if (data.stream) { data.streamId = data.stream; delete data.stream; }
+  if (data.department) { data.departmentId = data.department; delete data.department; }
+  if (data.branch) { data.branchId = data.branch; delete data.branch; }
+
+  const student = await prisma.student.update({
+    where: { id: req.params.id },
+    data,
+    include: {
+      branch: { select: { name: true, code: true } },
+      department: { select: { name: true, code: true } },
+      stream: { select: { name: true, code: true } },
+    },
+  });
+
   res.json(new ApiResponse(200, "Student updated", student));
 });
 
 const deleteStudent = asyncHandler(async (req, res) => {
-  const student = await Student.findByIdAndUpdate(req.params.id, { isActive: false }, { new: true });
-  if (!student) throw new ApiError(404, "Student not found");
+  const existing = await prisma.student.findFirst({ where: { id: req.params.id, collegeId: req.collegeId } });
+  if (!existing) throw new ApiError(404, "Student not found");
+
+  await prisma.student.update({ where: { id: req.params.id }, data: { isActive: false } });
   res.json(new ApiResponse(200, "Student deactivated"));
 });
 
@@ -70,14 +105,22 @@ const uploadCSV = asyncHandler(async (req, res) => {
   });
 
   if (parseErrors.length > 0) throw new ApiError(400, "CSV parse error", parseErrors);
+  if (!data.length) throw new ApiError(400, "CSV is empty");
 
   const required = ["name", "email", "enrollmentNo", "branchCode", "year"];
-  const missing = required.filter((f) => !Object.keys(data[0] || {}).includes(f));
+  const missing = required.filter((f) => !Object.keys(data[0]).includes(f));
   if (missing.length) throw new ApiError(400, `Missing CSV columns: ${missing.join(", ")}`);
 
-  // Resolve branches
+  // Resolve branches for this college only
   const branchCodes = [...new Set(data.map((r) => r.branchCode?.toUpperCase()))];
-  const branches = await Branch.find({ code: { $in: branchCodes } }).populate("department stream");
+  const branches = await prisma.branch.findMany({
+    where: { collegeId: req.collegeId, code: { in: branchCodes } },
+    include: {
+      department: { select: { id: true } },
+      stream: { select: { id: true } },
+    },
+  });
+
   const branchMap = {};
   branches.forEach((b) => (branchMap[b.code] = b));
 
@@ -86,13 +129,12 @@ const uploadCSV = asyncHandler(async (req, res) => {
 
   for (let i = 0; i < data.length; i++) {
     const row = data[i];
-
     const branch = branchMap[row.branchCode?.toUpperCase()];
+
     if (!branch) {
       rowErrors.push({ row: i + 2, field: "branchCode", message: `Branch '${row.branchCode}' not found` });
       continue;
     }
-
     if (!row.name || !row.email || !row.enrollmentNo) {
       rowErrors.push({ row: i + 2, field: "required", message: "Missing required field" });
       continue;
@@ -100,17 +142,18 @@ const uploadCSV = asyncHandler(async (req, res) => {
 
     const yearVal = parseInt(String(row.year).trim(), 10);
     if (isNaN(yearVal) || yearVal < 1 || yearVal > 6) {
-      rowErrors.push({ row: i + 2, field: "year", message: `Invalid year value: '${row.year}' — must be 1 to 6` });
+      rowErrors.push({ row: i + 2, field: "year", message: `Invalid year: '${row.year}' — must be 1 to 6` });
       continue;
     }
 
     toInsert.push({
+      collegeId: req.collegeId,
       name: row.name.trim(),
       email: row.email.trim().toLowerCase(),
       enrollmentNo: row.enrollmentNo.trim(),
-      stream: branch.stream._id,
-      department: branch.department._id,
-      branch: branch._id,
+      streamId: branch.stream.id,
+      departmentId: branch.department.id,
+      branchId: branch.id,
       year: yearVal,
       gender: row.gender || "other",
       phone: row.phone || "",
@@ -121,17 +164,19 @@ const uploadCSV = asyncHandler(async (req, res) => {
   if (rowErrors.length > 0) throw new ApiError(400, "CSV validation failed", rowErrors);
 
   try {
-    await Student.insertMany(toInsert, { ordered: true });
+    await prisma.student.createMany({ data: toInsert, skipDuplicates: true });
   } catch (err) {
-    if (err.code === 11000) throw new ApiError(409, "Duplicate enrollment number or email in CSV");
-    throw err;
+    throw new ApiError(409, "Duplicate enrollment number or email in CSV");
   }
 
-  await ActivityLog.create({
-    action: "STUDENT_CSV_UPLOAD",
-    entity: "Student",
-    description: `${toInsert.length} students imported via CSV`,
-    metadata: { count: toInsert.length },
+  await prisma.activityLog.create({
+    data: {
+      collegeId: req.collegeId,
+      action: "STUDENT_CSV_UPLOAD",
+      entity: "Student",
+      description: `${toInsert.length} students imported via CSV`,
+      metadata: { count: toInsert.length },
+    },
   });
 
   res.json(new ApiResponse(200, `${toInsert.length} students imported successfully`, { imported: toInsert.length }));

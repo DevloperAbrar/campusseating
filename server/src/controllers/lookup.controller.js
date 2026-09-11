@@ -1,45 +1,34 @@
 const asyncHandler = require("../utils/asyncHandler");
 const ApiError = require("../utils/ApiError");
 const ApiResponse = require("../utils/ApiResponse");
-const Student = require("../models/Student.model");
-const Faculty = require("../models/Faculty.model");
-const SeatingAssignment = require("../models/SeatingAssignment.model");
-const InvigilatorAssignment = require("../models/InvigilatorAssignment.model");
-const Exam = require("../models/Exam.model");
-const Shift = require("../models/Shift.model");
+const { prisma } = require("../config/db");
 
 const studentLookup = asyncHandler(async (req, res) => {
   const { enrollmentNo } = req.params;
 
-  const student = await Student.findOne({ enrollmentNo, isActive: true })
-    .populate("branch department stream", "name code").lean();
+  const student = await prisma.student.findFirst({
+    where: { enrollmentNo, isActive: true },
+    include: { branch: { select: { name: true, code: true } }, department: { select: { name: true } }, stream: { select: { name: true } } },
+  });
   if (!student) throw new ApiError(404, "Student not found");
 
-  // Find published assignments
-  const assignments = await SeatingAssignment.find({ student: student._id })
-    .populate("room", "name building floor")
-    .populate({ path: "shift", select: "name startTime endTime isPublished" })
-    .populate({ path: "exam", select: "title academicYear examDate status" })
-    .lean();
+  const assignments = await prisma.seatingAssignment.findMany({
+    where: { studentId: student.id },
+    include: {
+      room: { select: { name: true, building: true, floor: true } },
+      shift: { select: { name: true, startTime: true, endTime: true, isPublished: true } },
+      exam: { select: { title: true, academicYear: true, examDate: true, status: true } },
+    },
+  });
 
   const published = assignments.filter((a) => a.shift?.isPublished);
 
   res.json(new ApiResponse(200, "Student found", {
-    student: {
-      name: student.name,
-      enrollmentNo: student.enrollmentNo,
-      branch: student.branch?.name,
-      year: student.year,
-    },
+    student: { name: student.name, enrollmentNo: student.enrollmentNo, branch: student.branch?.name, year: student.year },
     seatAssignments: published.map((a) => ({
-      exam: a.exam?.title,
-      academicYear: a.exam?.academicYear,
-      examDate: a.exam?.examDate,
-      shift: a.shift?.name,
-      time: `${a.shift?.startTime} – ${a.shift?.endTime}`,
-      room: a.room?.name,
-      building: a.room?.building,
-      seatId: a.seatId,
+      exam: a.exam?.title, academicYear: a.exam?.academicYear, examDate: a.exam?.examDate,
+      shift: a.shift?.name, time: `${a.shift?.startTime} – ${a.shift?.endTime}`,
+      room: a.room?.name, building: a.room?.building, seatId: a.seatId,
     })),
   }));
 });
@@ -47,31 +36,27 @@ const studentLookup = asyncHandler(async (req, res) => {
 const facultyLookup = asyncHandler(async (req, res) => {
   const { email } = req.params;
 
-  const faculty = await Faculty.findOne({ email: email.toLowerCase(), isActive: true })
-    .populate("departments", "name code").lean();
+  const faculty = await prisma.faculty.findFirst({
+    where: { email: email.toLowerCase(), isActive: true },
+  });
   if (!faculty) throw new ApiError(404, "Faculty not found");
 
-  const assignments = await InvigilatorAssignment.find({ faculty: faculty._id })
-    .populate("room", "name building")
-    .populate({ path: "shift", select: "name startTime endTime isPublished" })
-    .populate({ path: "exam", select: "title academicYear examDate" })
-    .lean();
+  const assignments = await prisma.invigilatorAssignment.findMany({
+    where: { facultyId: faculty.id },
+    include: {
+      room: { select: { name: true, building: true } },
+      shift: { select: { name: true, startTime: true, endTime: true, isPublished: true } },
+      exam: { select: { title: true, academicYear: true, examDate: true } },
+    },
+  });
 
   const published = assignments.filter((a) => a.shift?.isPublished);
 
   res.json(new ApiResponse(200, "Faculty found", {
-    faculty: {
-      name: faculty.name,
-      email: faculty.email,
-      designation: faculty.designation,
-    },
+    faculty: { name: faculty.name, email: faculty.email, designation: faculty.designation },
     dutyAssignments: published.map((a) => ({
-      exam: a.exam?.title,
-      examDate: a.exam?.examDate,
-      shift: a.shift?.name,
-      time: `${a.shift?.startTime} – ${a.shift?.endTime}`,
-      room: a.room?.name,
-      building: a.room?.building,
+      exam: a.exam?.title, examDate: a.exam?.examDate, shift: a.shift?.name,
+      time: `${a.shift?.startTime} – ${a.shift?.endTime}`, room: a.room?.name, building: a.room?.building,
     })),
   }));
 });

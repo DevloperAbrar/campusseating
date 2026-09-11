@@ -1,31 +1,13 @@
-const { ZipArchive } = require("archiver");     // v8: named export, not default function
-const { PDFDocument } = require("pdf-lib");         // for merging multiple PDFs into one
+const { PDFDocument } = require("pdf-lib");
+const archiver = require("archiver");
 const asyncHandler = require("../utils/asyncHandler");
 const ApiError = require("../utils/ApiError");
-const Exam = require("../models/Exam.model");
-const Shift = require("../models/Shift.model");
-const Room = require("../models/Room.model");
-const SeatingAssignment = require("../models/SeatingAssignment.model");
-const InvigilatorAssignment = require("../models/InvigilatorAssignment.model");
+const { prisma } = require("../config/db");
 const {
-  generateRoomChartHTML,
-  generateFacultyDutyHTML,
-  generateSeatLabelsHTML,
-  htmlToPDF,
-  launchBrowser,
-  renderPDFOnBrowser,
+  generateRoomChartHTML, generateFacultyDutyHTML,
+  generateSeatLabelsHTML, htmlToPDF, launchBrowser, renderPDFOnBrowser,
 } = require("../services/pdf.service");
 
-// ── Helper: create a zip archive ─────────────────────────────────────────────
-const createZip = () => {
-  const archive = new ZipArchive({ zlib: { level: 6 } });
-  archive.on('error', (err) => {
-    console.error('Archive error (zip generation failed safely, not crashed):', err);
-  });
-  return archive;
-};
-
-// ── Helper: merge array of PDF Buffers into one PDF Buffer ───────────────────
 const mergePDFs = async (pdfBuffers) => {
   const merged = await PDFDocument.create();
   for (const buf of pdfBuffers) {
@@ -36,76 +18,85 @@ const mergePDFs = async (pdfBuffers) => {
   return Buffer.from(await merged.save());
 };
 
-// ── Shared data fetcher ───────────────────────────────────────────────────────
 const fetchRoomData = async (shiftId, roomId) => {
   const [assignments, invigilators] = await Promise.all([
-    SeatingAssignment.find({ shift: shiftId, room: roomId })
-      .populate({ path: "student", populate: { path: "branch", select: "name code" }, select: "name enrollmentNo branch" })
-      .lean(),
-    InvigilatorAssignment.find({ shift: shiftId, room: roomId })
-      .populate("faculty", "name designation")
-      .lean(),
+    prisma.seatingAssignment.findMany({
+      where: { shiftId, roomId },
+      include: { student: { include: { branch: { select: { name: true, code: true } } } } },
+    }),
+    prisma.invigilatorAssignment.findMany({
+      where: { shiftId, roomId },
+      include: { faculty: { select: { name: true, designation: true } } },
+    }),
   ]);
   return { assignments, invigilators };
 };
 
-// ── Room Chart — single room ──────────────────────────────────────────────────
 const getRoomPDF = asyncHandler(async (req, res) => {
   const { examId, shiftId, roomId } = req.params;
-  const [exam, shift, room] = await Promise.all([Exam.findById(examId), Shift.findById(shiftId), Room.findById(roomId)]);
+  const [exam, shift, room] = await Promise.all([
+    prisma.exam.findFirst({ where: { id: examId, collegeId: req.collegeId } }),
+    prisma.shift.findFirst({ where: { id: shiftId, collegeId: req.collegeId } }),
+    prisma.room.findFirst({ where: { id: roomId, collegeId: req.collegeId } }),
+  ]);
   if (!exam || !shift || !room) throw new ApiError(404, "Not found");
 
   const { assignments, invigilators } = await fetchRoomData(shiftId, roomId);
   const html = generateRoomChartHTML(exam, shift, room, assignments, invigilators);
-  const pdf  = await htmlToPDF(html);
+  const pdf = await htmlToPDF(html);
 
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `attachment; filename="${room.name.replace(/\s+/g, "_")}_seating.pdf"`);
   res.send(pdf);
 });
 
-// ── Room Charts — all rooms as ZIP ───────────────────────────────────────────
 const getAllRoomsPDF = asyncHandler(async (req, res) => {
   const { examId, shiftId } = req.params;
-  const [exam, shift] = await Promise.all([Exam.findById(examId), Shift.findById(shiftId)]);
+  const [exam, shift] = await Promise.all([
+    prisma.exam.findFirst({ where: { id: examId, collegeId: req.collegeId } }),
+    prisma.shift.findFirst({ where: { id: shiftId, collegeId: req.collegeId }, include: { shiftRooms: true } }),
+  ]);
   if (!exam || !shift) throw new ApiError(404, "Not found");
 
-  const rooms = await Room.find({ _id: { $in: shift.rooms.map((r) => r.room) } });
+  const roomIds = shift.shiftRooms.map((r) => r.roomId);
+  const rooms = await prisma.room.findMany({ where: { id: { in: roomIds } } });
 
   res.setHeader("Content-Type", "application/zip");
   res.setHeader("Content-Disposition", `attachment; filename="room_charts_${shift.name.replace(/\s+/g, "_")}.zip"`);
 
-  const archive = createZip();
+  const archive = archiver("zip", { zlib: { level: 6 } });
   archive.pipe(res);
 
   const browser = await launchBrowser();
   try {
     for (const room of rooms) {
-      const { assignments, invigilators } = await fetchRoomData(shiftId, room._id);
+      const { assignments, invigilators } = await fetchRoomData(shiftId, room.id);
       const html = generateRoomChartHTML(exam, shift, room, assignments, invigilators);
-      const pdf  = await renderPDFOnBrowser(browser, html);
+      const pdf = await renderPDFOnBrowser(browser, html);
       archive.append(Buffer.from(pdf), { name: `${room.name.replace(/\s+/g, "_")}_chart.pdf` });
     }
   } finally {
     await browser.close();
   }
-
   archive.finalize();
 });
 
-// ── Room Charts — all rooms merged into ONE PDF ───────────────────────────────
 const getAllRoomsMergedPDF = asyncHandler(async (req, res) => {
   const { examId, shiftId } = req.params;
-  const [exam, shift] = await Promise.all([Exam.findById(examId), Shift.findById(shiftId)]);
+  const [exam, shift] = await Promise.all([
+    prisma.exam.findFirst({ where: { id: examId, collegeId: req.collegeId } }),
+    prisma.shift.findFirst({ where: { id: shiftId, collegeId: req.collegeId }, include: { shiftRooms: true } }),
+  ]);
   if (!exam || !shift) throw new ApiError(404, "Not found");
 
-  const rooms = await Room.find({ _id: { $in: shift.rooms.map((r) => r.room) } });
+  const roomIds = shift.shiftRooms.map((r) => r.roomId);
+  const rooms = await prisma.room.findMany({ where: { id: { in: roomIds } } });
 
   const pdfBuffers = [];
   const browser = await launchBrowser();
   try {
     for (const room of rooms) {
-      const { assignments, invigilators } = await fetchRoomData(shiftId, room._id);
+      const { assignments, invigilators } = await fetchRoomData(shiftId, room.id);
       const html = generateRoomChartHTML(exam, shift, room, assignments, invigilators);
       pdfBuffers.push(await renderPDFOnBrowser(browser, html));
     }
@@ -114,102 +105,112 @@ const getAllRoomsMergedPDF = asyncHandler(async (req, res) => {
   }
 
   const merged = await mergePDFs(pdfBuffers);
-
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `attachment; filename="all_rooms_${shift.name.replace(/\s+/g, "_")}.pdf"`);
   res.send(merged);
 });
 
-// ── Seat Labels — single room ─────────────────────────────────────────────────
 const getSeatLabelsPDF = asyncHandler(async (req, res) => {
   const { examId, shiftId, roomId } = req.params;
   const variant = req.query.variant === "simple" ? "simple" : "detailed";
-
-  const [exam, shift, room] = await Promise.all([Exam.findById(examId), Shift.findById(shiftId), Room.findById(roomId)]);
+  const [exam, shift, room] = await Promise.all([
+    prisma.exam.findFirst({ where: { id: examId, collegeId: req.collegeId } }),
+    prisma.shift.findFirst({ where: { id: shiftId, collegeId: req.collegeId } }),
+    prisma.room.findFirst({ where: { id: roomId, collegeId: req.collegeId } }),
+  ]);
   if (!exam || !shift || !room) throw new ApiError(404, "Not found");
 
   const { assignments } = await fetchRoomData(shiftId, roomId);
   const html = generateSeatLabelsHTML(room, assignments, variant);
-  const pdf  = await htmlToPDF(html);
+  const pdf = await htmlToPDF(html);
 
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `attachment; filename="${room.name.replace(/\s+/g, "_")}_labels_${variant}.pdf"`);
   res.send(pdf);
 });
 
-// ── Seat Labels — all rooms as ZIP ───────────────────────────────────────────
+// ── NEW: zipped seat labels for every room in the shift ──
 const getAllSeatLabelsPDF = asyncHandler(async (req, res) => {
   const { examId, shiftId } = req.params;
   const variant = req.query.variant === "simple" ? "simple" : "detailed";
-
-  const [exam, shift] = await Promise.all([Exam.findById(examId), Shift.findById(shiftId)]);
+  const [exam, shift] = await Promise.all([
+    prisma.exam.findFirst({ where: { id: examId, collegeId: req.collegeId } }),
+    prisma.shift.findFirst({ where: { id: shiftId, collegeId: req.collegeId }, include: { shiftRooms: true } }),
+  ]);
   if (!exam || !shift) throw new ApiError(404, "Not found");
 
-  const rooms = await Room.find({ _id: { $in: shift.rooms.map((r) => r.room) } });
+  const roomIds = shift.shiftRooms.map((r) => r.roomId);
+  const rooms = await prisma.room.findMany({ where: { id: { in: roomIds } } });
 
   res.setHeader("Content-Type", "application/zip");
   res.setHeader("Content-Disposition", `attachment; filename="seat_labels_${variant}_${shift.name.replace(/\s+/g, "_")}.zip"`);
 
-  const archive = createZip();
+  const archive = archiver("zip", { zlib: { level: 6 } });
   archive.pipe(res);
 
   const browser = await launchBrowser();
   try {
     for (const room of rooms) {
-      const { assignments } = await fetchRoomData(shiftId, room._id);
-      if (!assignments.length) continue;
+      const { assignments } = await fetchRoomData(shiftId, room.id);
       const html = generateSeatLabelsHTML(room, assignments, variant);
-      const pdf  = await renderPDFOnBrowser(browser, html);
+      const pdf = await renderPDFOnBrowser(browser, html);
       archive.append(Buffer.from(pdf), { name: `${room.name.replace(/\s+/g, "_")}_labels_${variant}.pdf` });
     }
   } finally {
     await browser.close();
   }
-
   archive.finalize();
 });
 
-// ── Seat Labels — all rooms merged into ONE PDF ───────────────────────────────
+// ── NEW: single merged PDF of seat labels for every room in the shift ──
 const getAllSeatLabelsMergedPDF = asyncHandler(async (req, res) => {
   const { examId, shiftId } = req.params;
   const variant = req.query.variant === "simple" ? "simple" : "detailed";
-
-  const [exam, shift] = await Promise.all([Exam.findById(examId), Shift.findById(shiftId)]);
+  const [exam, shift] = await Promise.all([
+    prisma.exam.findFirst({ where: { id: examId, collegeId: req.collegeId } }),
+    prisma.shift.findFirst({ where: { id: shiftId, collegeId: req.collegeId }, include: { shiftRooms: true } }),
+  ]);
   if (!exam || !shift) throw new ApiError(404, "Not found");
 
-  const rooms = await Room.find({ _id: { $in: shift.rooms.map((r) => r.room) } });
+  const roomIds = shift.shiftRooms.map((r) => r.roomId);
+  const rooms = await prisma.room.findMany({ where: { id: { in: roomIds } } });
 
-  // Collect all rooms' data
-  const roomsData = [];
-  for (const room of rooms) {
-    const { assignments } = await fetchRoomData(shiftId, room._id);
-    if (!assignments.length) continue;
-    roomsData.push({ room, assignments });
+  const pdfBuffers = [];
+  const browser = await launchBrowser();
+  try {
+    for (const room of rooms) {
+      const { assignments } = await fetchRoomData(shiftId, room.id);
+      const html = generateSeatLabelsHTML(room, assignments, variant);
+      pdfBuffers.push(await renderPDFOnBrowser(browser, html));
+    }
+  } finally {
+    await browser.close();
   }
 
-  // Single HTML → single Puppeteer render → page-break-before per room
-  const html = generateSeatLabelsHTML(roomsData, variant);
-  const pdf  = await htmlToPDF(html);
-
+  const merged = await mergePDFs(pdfBuffers);
   res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", `attachment; filename="all_labels_${variant}_${shift.name.replace(/\s+/g, "_")}.pdf"`);
-  res.send(pdf);
+  res.setHeader("Content-Disposition", `attachment; filename="all_seat_labels_${variant}_${shift.name.replace(/\s+/g, "_")}.pdf"`);
+  res.send(merged);
 });
 
-// ── Faculty Duty Chart ────────────────────────────────────────────────────────
 const getFacultyDutyPDF = asyncHandler(async (req, res) => {
   const { examId } = req.params;
-  const exam = await Exam.findById(examId);
+  const exam = await prisma.exam.findFirst({ where: { id: examId, collegeId: req.collegeId } });
   if (!exam) throw new ApiError(404, "Exam not found");
 
-  const shifts      = await Shift.find({ exam: examId });
-  const assignments = await InvigilatorAssignment.find({ exam: examId })
-    .populate("faculty", "name designation email")
-    .populate("room", "name building")
-    .lean();
+  const [shifts, assignments] = await Promise.all([
+    prisma.shift.findMany({ where: { examId, collegeId: req.collegeId } }),
+    prisma.invigilatorAssignment.findMany({
+      where: { examId, collegeId: req.collegeId },
+      include: {
+        faculty: { select: { name: true, designation: true, email: true } },
+        room: { select: { name: true, building: true } },
+      },
+    }),
+  ]);
 
   const html = generateFacultyDutyHTML(exam, shifts, assignments);
-  const pdf  = await htmlToPDF(html);
+  const pdf = await htmlToPDF(html);
 
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", "attachment; filename=faculty_duty.pdf");
@@ -217,11 +218,7 @@ const getFacultyDutyPDF = asyncHandler(async (req, res) => {
 });
 
 module.exports = {
-  getRoomPDF,
-  getAllRoomsPDF,
-  getAllRoomsMergedPDF,
-  getSeatLabelsPDF,
-  getAllSeatLabelsPDF,
-  getAllSeatLabelsMergedPDF,
+  getRoomPDF, getAllRoomsPDF, getAllRoomsMergedPDF,
+  getSeatLabelsPDF, getAllSeatLabelsPDF, getAllSeatLabelsMergedPDF,
   getFacultyDutyPDF,
 };

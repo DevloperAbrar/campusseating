@@ -1,26 +1,29 @@
 const asyncHandler = require("../utils/asyncHandler");
 const ApiResponse = require("../utils/ApiResponse");
-const Student = require("../models/Student.model");
-const Faculty = require("../models/Faculty.model");
-const Room = require("../models/Room.model");
-const Exam = require("../models/Exam.model");
-const ActivityLog = require("../models/ActivityLog.model");
+const { prisma } = require("../config/db");
 
 const getDashboard = asyncHandler(async (req, res) => {
-  const [students, faculty, rooms, exams, recentLogs] = await Promise.all([
-    Student.countDocuments({ isActive: true }),
-    Faculty.countDocuments({ isActive: true }),
-    Room.countDocuments({ isActive: true }),
-    Exam.countDocuments(),
-    ActivityLog.find().sort({ performedAt: -1 }).limit(10).lean(),
-  ]);
+  const collegeId = req.collegeId;
 
-  const examsByStatus = await Exam.aggregate([
-    { $group: { _id: "$status", count: { $sum: 1 } } },
+  const [students, faculty, rooms, exams, recentLogs, examsByStatus] = await Promise.all([
+    prisma.student.count({ where: { collegeId, isActive: true } }),
+    prisma.faculty.count({ where: { collegeId, isActive: true } }),
+    prisma.room.count({ where: { collegeId, isActive: true } }),
+    prisma.exam.count({ where: { collegeId } }),
+    prisma.activityLog.findMany({
+      where: { collegeId },
+      orderBy: { performedAt: "desc" },
+      take: 10,
+    }),
+    prisma.exam.groupBy({
+      by: ["status"],
+      where: { collegeId },
+      _count: { status: true },
+    }),
   ]);
 
   const statusMap = {};
-  examsByStatus.forEach((e) => (statusMap[e._id] = e.count));
+  examsByStatus.forEach((e) => (statusMap[e.status] = e._count.status));
 
   res.json(new ApiResponse(200, "Dashboard data", {
     stats: { students, faculty, rooms, exams },
