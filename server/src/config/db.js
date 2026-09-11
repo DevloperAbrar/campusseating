@@ -6,9 +6,10 @@ const { Pool } = require("pg");
 // connection_limit in DATABASE_URL is ignored when using adapter — pool size is set here.
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  max: 10,              // max connections per PM2 worker (2 workers × 10 = 20 total)
+  max: 8,                    // 2 workers × 8 = 16 total, leaves headroom
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
+  allowExitOnIdle: true,     // ADD THIS — lets pool drain cleanly on PM2 reload
 });
 
 const adapter = new PrismaPg(pool);

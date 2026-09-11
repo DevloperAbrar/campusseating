@@ -33,7 +33,11 @@ const updateExam = asyncHandler(async (req, res) => {
   if (!exam) throw new ApiError(404, "Exam not found");
   if (exam.isLocked) throw new ApiError(403, "Exam is locked");
 
-  const updated = await prisma.exam.update({ where: { id: req.params.id }, data: req.body });
+  const { title, academicYear, examDate, description, status } = req.body;
+  const updated = await prisma.exam.update({
+    where: { id: req.params.id },
+    data: { title, academicYear, examDate, description, status },
+  });
   res.json(new ApiResponse(200, "Exam updated", updated));
 });
 
@@ -89,7 +93,11 @@ const updateShift = asyncHandler(async (req, res) => {
   if (!shift) throw new ApiError(404, "Shift not found");
   if (shift.isPublished) throw new ApiError(403, "Shift is published — unpublish first");
 
-  const updated = await prisma.shift.update({ where: { id: req.params.shiftId }, data: req.body });
+  const { name, startTime, endTime, selectedBranchIds, selectedYears, seatingRules } = req.body;
+  const updated = await prisma.shift.update({
+    where: { id: req.params.shiftId },
+    data: { name, startTime, endTime, selectedBranchIds, selectedYears, seatingRules },
+  });
   res.json(new ApiResponse(200, "Shift updated", updated));
 });
 

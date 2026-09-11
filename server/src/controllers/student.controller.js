@@ -15,7 +15,7 @@ const getStudents = asyncHandler(async (req, res) => {
   if (req.query.search) {
     where.OR = [
       { name: { contains: req.query.search, mode: "insensitive" } },
-      { enrollmentNo: { contains: req.query.search, mode: "insensitive" } },
+      { enrollmentNo: { startsWith: req.query.search, mode: "insensitive" } },
       { email: { contains: req.query.search, mode: "insensitive" } },
     ];
   }

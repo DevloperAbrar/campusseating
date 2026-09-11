@@ -23,10 +23,11 @@ const generateSeating = asyncHandler(async (req, res) => {
 
   const enrichedRooms = rooms.map((room) => {
     const shiftRoom = shift.shiftRooms.find((r) => r.roomId === room.id);
-    return { ...room, priority: shiftRoom?.priority || 99, usableCapacity: shiftRoom?.usableCapacity || room.usableCapacity };
+    return { ...room, _id: room.id, priority: shiftRoom?.priority || 99, usableCapacity: shiftRoom?.usableCapacity || room.usableCapacity };
   });
 
-  const { assignments, unassigned, warnings } = generateSeatingPlan(students, enrichedRooms, shift.seatingRules);
+  const mappedStudents = students.map((s) => ({ ...s, _id: s.id, branch: s.branchId }));
+  const { assignments, unassigned, warnings } = generateSeatingPlan(mappedStudents, enrichedRooms, shift.seatingRules);
 
   await prisma.seatingAssignment.deleteMany({ where: { shiftId: shift.id } });
 

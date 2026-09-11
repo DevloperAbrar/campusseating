@@ -65,7 +65,11 @@ const updateRoom = asyncHandler(async (req, res) => {
   if (!room) throw new ApiError(404, "Room not found");
   if (room.isLocked) throw new ApiError(403, "Room is locked after exam use");
 
-  const updated = await prisma.room.update({ where: { id: req.params.id }, data: req.body });
+  const { name, building, floor } = req.body;
+  const updated = await prisma.room.update({
+    where: { id: req.params.id },
+    data: { name, building, floor },
+  });
   res.json(new ApiResponse(200, "Room updated", updated));
 });
 
