@@ -384,10 +384,20 @@ const generateSeatLabelsHTML = (roomsData, variant = 'detailed') => {
 // bundled/installed Chromium (set PUPPETEER_EXECUTABLE_PATH in .env
 // only if you specifically need to point at a system Chrome).
 const launchBrowser = async () => {
+  // headless: "new" was removed in Puppeteer v21 — use boolean true.
+  // --disable-dev-shm-usage is mandatory on Linux VPS/Docker: the default /dev/shm
+  // is only 64MB which Chrome fills instantly and crashes silently without this flag.
   return puppeteer.launch({
-    headless: "new",
+    headless: true,
     executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-gpu"],
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-gpu",
+      "--no-zygote",
+      "--single-process",
+    ],
   });
 };
 
