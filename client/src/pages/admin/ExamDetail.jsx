@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { ArrowLeft, Plus, Pencil, Trash2, Users, Clock, CheckCircle, AlertTriangle, Eye } from 'lucide-react'
 import { useForm } from 'react-hook-form'
@@ -39,6 +39,23 @@ function ShiftForm({ defaultValues, rooms, branches, onSubmit, loading, onCancel
     defaultValues?.selectedBranchIds || []
   )
   const [selectedYears, setSelectedYears] = useState(defaultValues?.selectedYears || [])
+
+  // FIX: Years was hardcoded [1..6] regardless of actual branch length.
+  // Now derived from the selected branches' totalYears (or all branches if none picked yet),
+  // so a college with 4-year branches only ever sees years 1-4.
+  const maxYears = (() => {
+    const relevant = selectedBranches.length
+      ? branches?.filter(b => selectedBranches.includes(b.id))
+      : branches
+    const years = relevant?.map(b => b.totalYears).filter(Boolean)
+    return years?.length ? Math.max(...years) : 4
+  })()
+  const yearOptions = Array.from({ length: maxYears }, (_, i) => i + 1)
+
+  // Drop any previously selected year that no longer fits once branches change
+  useEffect(() => {
+    setSelectedYears(prev => prev.filter(y => y <= maxYears))
+  }, [maxYears])
 
   // FIX: toggle by b.id — was b._id which was always undefined → all shared same undefined key
   const toggleBranch = (id) => setSelectedBranches(prev =>
@@ -99,7 +116,7 @@ function ShiftForm({ defaultValues, rooms, branches, onSubmit, loading, onCancel
       <div>
         <label className="label">Years</label>
         <div className="flex gap-2 mt-1">
-          {[1,2,3,4,5,6].map(y => (
+          {yearOptions.map(y => (
             <button key={y} type="button"
               onClick={() => toggleYear(y)}
               className={`w-10 h-10 rounded-lg text-sm font-medium border transition-colors
