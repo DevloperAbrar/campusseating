@@ -57,17 +57,17 @@ function Streams({ streams, loading, onRefresh }) {
   const openEdit = (row) => { reset(row); modal.open(row) }
 
   const onSubmit = (data) => {
-    const fn = modal.data?._id
-      ? () => streamsAPI.update(modal.data._id, data)
+    const fn = modal.data?.id
+      ? () => streamsAPI.update(modal.data.id, data)
       : () => streamsAPI.create(data)
     mutate(fn, {
-      successMsg: modal.data?._id ? 'Stream updated' : 'Stream created',
+      successMsg: modal.data?.id ? 'Stream updated' : 'Stream created',
       onSuccess: () => { modal.close(); onRefresh() },
     })
   }
 
   const onDelete = () => {
-    mutate(() => streamsAPI.delete(confirm.data._id), {
+    mutate(() => streamsAPI.delete(confirm.data.id), {
       successMsg: 'Stream deleted',
       onSuccess: () => { confirm.close(); onRefresh() },
     })
@@ -89,7 +89,7 @@ function Streams({ streams, loading, onRefresh }) {
           { key: 'isActive', label: 'Status', render: (r) => <Badge color={r.isActive ? 'green' : 'gray'}>{r.isActive ? 'Active' : 'Inactive'}</Badge> },
         ]}
       />
-      <Modal isOpen={modal.isOpen} onClose={modal.close} title={modal.data?._id ? 'Edit Stream' : 'Add Stream'} size="sm">
+      <Modal isOpen={modal.isOpen} onClose={modal.close} title={modal.data?.id ? 'Edit Stream' : 'Add Stream'} size="sm">
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <Input label="Name" required placeholder="e.g. BTech" error={errors.name?.message} {...register('name', { required: 'Required' })} />
           <Input label="Code" required placeholder="e.g. BTECH" error={errors.code?.message} {...register('code', { required: 'Required' })} />
@@ -110,20 +110,20 @@ function Departments({ departments, streams, loading, onRefresh }) {
   const { register, handleSubmit, reset, formState: { errors } } = useForm()
 
   const openAdd = () => { reset({}); modal.open(null) }
-  const openEdit = (row) => { reset({ ...row, stream: row.stream?._id || row.stream }); modal.open(row) }
+  const openEdit = (row) => { reset({ ...row, stream: row.stream?.id || row.stream }); modal.open(row) }
 
   const onSubmit = (data) => {
-    const fn = modal.data?._id
-      ? () => departmentsAPI.update(modal.data._id, data)
+    const fn = modal.data?.id
+      ? () => departmentsAPI.update(modal.data.id, data)
       : () => departmentsAPI.create(data)
     mutate(fn, {
-      successMsg: modal.data?._id ? 'Department updated' : 'Department created',
+      successMsg: modal.data?.id ? 'Department updated' : 'Department created',
       onSuccess: () => { modal.close(); onRefresh() },
     })
   }
 
   const onDelete = () => {
-    mutate(() => departmentsAPI.delete(confirm.data._id), {
+    mutate(() => departmentsAPI.delete(confirm.data.id), {
       successMsg: 'Department deleted',
       onSuccess: () => { confirm.close(); onRefresh() },
     })
@@ -145,13 +145,13 @@ function Departments({ departments, streams, loading, onRefresh }) {
           { key: 'isActive', label: 'Status', render: (r) => <Badge color={r.isActive ? 'green' : 'gray'}>{r.isActive ? 'Active' : 'Inactive'}</Badge> },
         ]}
       />
-      <Modal isOpen={modal.isOpen} onClose={modal.close} title={modal.data?._id ? 'Edit Department' : 'Add Department'} size="sm">
+      <Modal isOpen={modal.isOpen} onClose={modal.close} title={modal.data?.id ? 'Edit Department' : 'Add Department'} size="sm">
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <Input label="Name" required placeholder="e.g. Dept of Computer Science" error={errors.name?.message} {...register('name', { required: 'Required' })} />
           <Input label="Code" required placeholder="e.g. CSE" error={errors.code?.message} {...register('code', { required: 'Required' })} />
           <Select label="Stream" required error={errors.stream?.message} {...register('stream', { required: 'Required' })}>
             <option value="">Select stream…</option>
-            {streams?.map((s) => <option key={s._id} value={s._id}>{s.name}</option>)}
+            {streams?.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </Select>
           <div className="flex justify-end gap-3"><Button variant="secondary" type="button" onClick={modal.close}>Cancel</Button><Button type="submit" loading={ml}>Save</Button></div>
         </form>
@@ -170,22 +170,22 @@ function Branches({ branches, departments, streams, loading, onRefresh }) {
 
   const openAdd = () => { reset({}); modal.open(null) }
   const openEdit = (row) => {
-    reset({ ...row, department: row.department?._id || row.department, stream: row.stream?._id || row.stream })
+    reset({ ...row, department: row.department?.id || row.department, stream: row.stream?.id || row.stream })
     modal.open(row)
   }
 
   const onSubmit = (data) => {
-    const fn = modal.data?._id
-      ? () => branchesAPI.update(modal.data._id, data)
+    const fn = modal.data?.id
+      ? () => branchesAPI.update(modal.data.id, data)
       : () => branchesAPI.create(data)
     mutate(fn, {
-      successMsg: modal.data?._id ? 'Branch updated' : 'Branch created',
+      successMsg: modal.data?.id ? 'Branch updated' : 'Branch created',
       onSuccess: () => { modal.close(); onRefresh() },
     })
   }
 
   const onDelete = () => {
-    mutate(() => branchesAPI.delete(confirm.data._id), {
+    mutate(() => branchesAPI.delete(confirm.data.id), {
       successMsg: 'Branch deleted',
       onSuccess: () => { confirm.close(); onRefresh() },
     })
@@ -208,17 +208,17 @@ function Branches({ branches, departments, streams, loading, onRefresh }) {
           { key: 'totalYears', label: 'Years' },
         ]}
       />
-      <Modal isOpen={modal.isOpen} onClose={modal.close} title={modal.data?._id ? 'Edit Branch' : 'Add Branch'} size="sm">
+      <Modal isOpen={modal.isOpen} onClose={modal.close} title={modal.data?.id ? 'Edit Branch' : 'Add Branch'} size="sm">
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <Input label="Name" required placeholder="e.g. Computer Science & Engineering" error={errors.name?.message} {...register('name', { required: 'Required' })} />
           <Input label="Code" required placeholder="e.g. CSE" error={errors.code?.message} {...register('code', { required: 'Required' })} />
           <Select label="Stream" required error={errors.stream?.message} {...register('stream', { required: 'Required' })}>
             <option value="">Select stream…</option>
-            {streams?.map((s) => <option key={s._id} value={s._id}>{s.name}</option>)}
+            {streams?.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </Select>
           <Select label="Department" required error={errors.department?.message} {...register('department', { required: 'Required' })}>
             <option value="">Select department…</option>
-            {departments?.map((d) => <option key={d._id} value={d._id}>{d.name}</option>)}
+            {departments?.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
           </Select>
           <Input label="Total Years" type="number" required min={1} max={6} {...register('totalYears', { required: 'Required', valueAsNumber: true })} />
           <div className="flex justify-end gap-3"><Button variant="secondary" type="button" onClick={modal.close}>Cancel</Button><Button type="submit" loading={ml}>Save</Button></div>
