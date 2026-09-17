@@ -30,24 +30,23 @@ export default function Faculty() {
 
   const openAdd = () => { reset({}); modal.open(null) }
   const openEdit = (row) => {
-    reset({ ...row, departments: row.departments?.map((d) => d._id || d) })
+    reset({ ...row, departments: row.departments?.map((d) => d.id || d) })
     modal.open(row)
   }
 
   const onSubmit = (data) => {
-    // departments may come as single value from select; coerce to array
     const payload = { ...data, departments: data.departments ? [data.departments].flat() : [] }
-    const fn = modal.data?._id
-      ? () => facultyAPI.update(modal.data._id, payload)
+    const fn = modal.data?.id
+      ? () => facultyAPI.update(modal.data.id, payload)
       : () => facultyAPI.create(payload)
     mutate(fn, {
-      successMsg: modal.data?._id ? 'Faculty updated' : 'Faculty added',
+      successMsg: modal.data?.id ? 'Faculty updated' : 'Faculty added',
       onSuccess: () => { modal.close(); refetch() },
     })
   }
 
   const onDelete = () => {
-    mutate(() => facultyAPI.delete(confirm.data._id), {
+    mutate(() => facultyAPI.delete(confirm.data.id), {
       successMsg: 'Faculty deactivated',
       onSuccess: () => { confirm.close(); refetch() },
     })
@@ -89,7 +88,7 @@ export default function Faculty() {
         <Pagination page={page} totalPages={Math.ceil((faculty?.length || 0) / limit)} onPage={setPage} />
       </div>
 
-      <Modal isOpen={modal.isOpen} onClose={modal.close} title={modal.data?._id ? 'Edit Faculty' : 'Add Faculty'} size="md">
+      <Modal isOpen={modal.isOpen} onClose={modal.close} title={modal.data?.id ? 'Edit Faculty' : 'Add Faculty'} size="md">
         <form onSubmit={handleSubmit(onSubmit)} className="grid grid-cols-2 gap-4">
           <div className="col-span-2">
             <Input label="Full Name" required error={errors.name?.message} {...register('name', { required: 'Required' })} />
@@ -104,7 +103,7 @@ export default function Faculty() {
           <div className="col-span-2">
             <Select label="Department" {...register('departments')}>
               <option value="">Select department…</option>
-              {departments?.map((d) => <option key={d._id} value={d._id}>{d.name}</option>)}
+              {departments?.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
             </Select>
           </div>
           <div className="col-span-2 flex justify-end gap-3">

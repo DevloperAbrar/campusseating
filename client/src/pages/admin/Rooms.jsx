@@ -25,17 +25,17 @@ export default function Rooms() {
   )
 
   const handleSave = (data) => {
-    const fn = modal.data?._id
-      ? () => roomsAPI.update(modal.data._id, data)
+    const fn = modal.data?.id
+      ? () => roomsAPI.update(modal.data.id, data)
       : () => roomsAPI.create(data)
     mutate(fn, {
-      successMsg: modal.data?._id ? 'Room updated' : 'Room created',
+      successMsg: modal.data?.id ? 'Room updated' : 'Room created',
       onSuccess: () => { modal.close(); refetch() },
     })
   }
 
   const handleDelete = () => {
-    mutate(() => roomsAPI.delete(confirm.data._id), {
+    mutate(() => roomsAPI.delete(confirm.data.id), {
       successMsg: 'Room deactivated',
       onSuccess: () => { confirm.close(); refetch() },
     })
@@ -47,8 +47,7 @@ export default function Rooms() {
     const newStatus = cycleStatus[seat.status] || 'available'
 
     try {
-      await roomsAPI.updateSeats(room._id, [{ seatId: seat.seatId, status: newStatus }])
-      // Update local seat in modal data
+      await roomsAPI.updateSeats(room.id, [{ seatId: seat.seatId, status: newStatus }])
       const updated = {
         ...room,
         seats: room.seats.map((s) => s.seatId === seat.seatId ? { ...s, status: newStatus } : s),
@@ -62,8 +61,8 @@ export default function Rooms() {
 
   const openSeatEditor = async (room) => {
     try {
-      const res = await roomsAPI.getById(room._id)
-      seatModal.open(res.data.data)  // res.data.data ← fix
+      const res = await roomsAPI.getById(room.id)
+      seatModal.open(res.data.data)
     } catch {
       toast.error('Failed to load seat layout')
     }
@@ -128,7 +127,7 @@ export default function Rooms() {
       </div>
 
       {/* Add/Edit Room Modal */}
-      <Modal isOpen={modal.isOpen} onClose={modal.close} title={modal.data?._id ? `Edit Room — ${modal.data.name}` : 'Add New Room'} size="md">
+      <Modal isOpen={modal.isOpen} onClose={modal.close} title={modal.data?.id ? `Edit Room — ${modal.data.name}` : 'Add New Room'} size="md">
         <RoomForm
           defaultValues={modal.data}
           onSubmit={handleSave}

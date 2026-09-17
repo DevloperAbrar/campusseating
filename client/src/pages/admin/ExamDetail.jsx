@@ -30,26 +30,38 @@ function ShiftForm({ defaultValues, rooms, branches, onSubmit, loading, onCancel
     },
   })
   const [rulesValue, setRulesValue] = useState(defaultValues?.seatingRules)
-  const [selectedRooms, setSelectedRooms] = useState(defaultValues?.rooms || [])
-  const [selectedBranches, setSelectedBranches] = useState(defaultValues?.selectedBranches?.map(b => b._id || b) || [])
+  // FIX: use r.id (not r._id) for room ids
+  const [selectedRooms, setSelectedRooms] = useState(
+    defaultValues?.shiftRooms?.map(r => ({ room: r.roomId, priority: r.priority, usableCapacity: r.usableCapacity })) || []
+  )
+  // FIX: use b.id (not b._id) for branch ids
+  const [selectedBranches, setSelectedBranches] = useState(
+    defaultValues?.selectedBranchIds || []
+  )
   const [selectedYears, setSelectedYears] = useState(defaultValues?.selectedYears || [])
 
-  const toggleBranch = (id) => setSelectedBranches(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
-  const toggleYear = (y) => setSelectedYears(prev => prev.includes(y) ? prev.filter(x => x !== y) : [...prev, y])
+  // FIX: toggle by b.id — was b._id which was always undefined → all shared same undefined key
+  const toggleBranch = (id) => setSelectedBranches(prev =>
+    prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+  )
+  const toggleYear = (y) => setSelectedYears(prev =>
+    prev.includes(y) ? prev.filter(x => x !== y) : [...prev, y]
+  )
   const toggleRoom = (id) => {
     setSelectedRooms(prev => {
-      const exists = prev.find(r => r.room === id || r.room?._id === id)
-      if (exists) return prev.filter(r => (r.room?._id || r.room) !== id)
-      return [...prev, { room: id, priority: prev.length + 1, usableCapacity: rooms.find(r => r._id === id)?.usableCapacity || 0 }]
+      const exists = prev.find(r => r.room === id)
+      if (exists) return prev.filter(r => r.room !== id)
+      const roomData = rooms.find(r => r.id === id)
+      return [...prev, { room: id, priority: prev.length + 1, usableCapacity: roomData?.usableCapacity || 0 }]
     })
   }
 
-  const isRoomSelected = (id) => selectedRooms.some(r => (r.room?._id || r.room) === id)
+  const isRoomSelected = (id) => selectedRooms.some(r => r.room === id)
 
   const handleSubmitForm = (data) => {
     onSubmit({
       ...data,
-      selectedBranches,
+      selectedBranchIds: selectedBranches,
       selectedYears,
       rooms: selectedRooms,
       seatingRules: rulesValue || data.seatingRules,
@@ -68,16 +80,16 @@ function ShiftForm({ defaultValues, rooms, branches, onSubmit, loading, onCancel
           {...register('endTime', { required: 'Required' })} />
       </div>
 
-      {/* Branches */}
+      {/* Branches — FIX: use b.id */}
       <div>
         <label className="label">Branches</label>
         <div className="flex flex-wrap gap-2 mt-1">
           {branches?.map(b => (
             <button
-              key={b._id} type="button"
-              onClick={() => toggleBranch(b._id)}
+              key={b.id} type="button"
+              onClick={() => toggleBranch(b.id)}
               className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors
-                ${selectedBranches.includes(b._id) ? 'bg-navy text-white border-navy' : 'bg-white text-gray-600 border-gray-200 hover:border-navy'}`}
+                ${selectedBranches.includes(b.id) ? 'bg-navy text-white border-navy' : 'bg-white text-gray-600 border-gray-200 hover:border-navy'}`}
             >{b.code}</button>
           ))}
         </div>
@@ -97,18 +109,18 @@ function ShiftForm({ defaultValues, rooms, branches, onSubmit, loading, onCancel
         </div>
       </div>
 
-      {/* Rooms */}
+      {/* Rooms — FIX: use r.id */}
       <div>
         <label className="label">Rooms (select all rooms for this shift)</label>
         <div className="grid grid-cols-2 gap-2 mt-1">
           {rooms?.map(r => (
-            <button key={r._id} type="button"
-              onClick={() => toggleRoom(r._id)}
+            <button key={r.id} type="button"
+              onClick={() => toggleRoom(r.id)}
               className={`text-left px-3 py-2 rounded-lg text-sm border transition-colors
-                ${isRoomSelected(r._id) ? 'bg-navy text-white border-navy' : 'bg-white text-gray-600 border-gray-200 hover:border-navy'}`}
+                ${isRoomSelected(r.id) ? 'bg-navy text-white border-navy' : 'bg-white text-gray-600 border-gray-200 hover:border-navy'}`}
             >
               <span className="font-medium">{r.name}</span>
-              <span className={`ml-2 text-xs ${isRoomSelected(r._id) ? 'text-white/70' : 'text-gray-400'}`}>
+              <span className={`ml-2 text-xs ${isRoomSelected(r.id) ? 'text-white/70' : 'text-gray-400'}`}>
                 {r.usableCapacity} seats
               </span>
             </button>
@@ -141,10 +153,13 @@ export default function ExamDetail() {
   const confirm = useModal()
   const { mutate, loading: ml } = useMutation()
 
-  const { data: exam, loading: examLoading } = useFetch(() => examsAPI.list().then(r => {
-    const list = r.data.data
-    return { data: { data: list?.find?.(e => e._id === examId) } }
-  }), [examId])
+  // FIX: fetch exam by id properly — was comparing e._id to examId (both would mismatch)
+  const { data: exam, loading: examLoading } = useFetch(() =>
+    examsAPI.list({ limit: 200 }).then(r => {
+      const list = r.data.data
+      return { data: { data: list?.find?.(e => e.id === examId) } }
+    }), [examId]
+  )
 
   const { data: shifts, loading: shLoading, refetch: refetchShifts } = useFetch(
     () => shiftsAPI.list(examId), [examId]
@@ -152,21 +167,23 @@ export default function ExamDetail() {
   const { data: rooms } = useFetch(() => roomsAPI.list({ limit: 100 }))
   const { data: branches } = useFetch(() => branchesAPI.list({ limit: 200 }))
 
-  // Pick first shift as active by default
-  const activeShift = (shifts || []).find(s => s._id === activeShiftId) || shifts?.[0]
+  // FIX: use s.id (not s._id)
+  const activeShift = (shifts || []).find(s => s.id === activeShiftId) || shifts?.[0]
 
   const handleSaveShift = (data) => {
-    const fn = modal.data?._id
-      ? () => shiftsAPI.update(examId, modal.data._id, data)
+    // FIX: modal.data?.id (not ._id)
+    const fn = modal.data?.id
+      ? () => shiftsAPI.update(examId, modal.data.id, data)
       : () => shiftsAPI.create(examId, data)
     mutate(fn, {
-      successMsg: modal.data?._id ? 'Shift updated' : 'Shift created',
+      successMsg: modal.data?.id ? 'Shift updated' : 'Shift created',
       onSuccess: () => { modal.close(); refetchShifts() },
     })
   }
 
   const handleDeleteShift = () => {
-    mutate(() => shiftsAPI.delete(examId, confirm.data._id), {
+    // FIX: confirm.data.id (not ._id)
+    mutate(() => shiftsAPI.delete(examId, confirm.data.id), {
       successMsg: 'Shift deleted',
       onSuccess: () => { confirm.close(); refetchShifts() },
     })
@@ -232,7 +249,8 @@ export default function ExamDetail() {
           ) : (
             <div className="space-y-3">
               {shifts.map((shift) => (
-                <div key={shift._id} className="card p-4">
+                // FIX: shift.id (not shift._id)
+                <div key={shift.id} className="card p-4">
                   <div className="flex items-start justify-between">
                     <div>
                       <div className="flex items-center gap-2">
@@ -246,16 +264,14 @@ export default function ExamDetail() {
                       <div className="flex flex-wrap gap-2 mt-2">
                         <span className="text-xs text-gray-500">
                           <strong>{shift.totalStudents || 0}</strong> students ·{' '}
-                          <strong>{shift.rooms?.length || 0}</strong> rooms ·{' '}
+                          <strong>{shift.shiftRooms?.length || 0}</strong> rooms ·{' '}
                           <strong>{shift.totalAvailableSeats || 0}</strong> seats
                         </span>
-                        {shift.selectedBranches?.map(b => (
-                          <Badge key={b._id || b} color="blue">{b.code || b}</Badge>
-                        ))}
                       </div>
                     </div>
                     <div className="flex gap-1">
-                      <Button size="sm" variant="secondary" onClick={() => handleResolveStudents(shift._id)}>
+                      {/* FIX: use shift.id */}
+                      <Button size="sm" variant="secondary" onClick={() => handleResolveStudents(shift.id)}>
                         Resolve Students
                       </Button>
                       <button
@@ -284,15 +300,15 @@ export default function ExamDetail() {
       {/* Invigilators tab */}
       {activeTab === 'invigilators' && (
         <div className="space-y-4">
-          {/* Shift selector */}
           {shifts?.length > 0 && (
             <div className="flex gap-2">
               {shifts.map(s => (
+                // FIX: s.id (not s._id)
                 <button
-                  key={s._id}
-                  onClick={() => setActiveShiftId(s._id)}
+                  key={s.id}
+                  onClick={() => setActiveShiftId(s.id)}
                   className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors
-                    ${(activeShiftId || shifts[0]?._id) === s._id ? 'bg-navy text-white border-navy' : 'bg-white text-gray-600 border-gray-200 hover:border-navy'}`}
+                    ${(activeShiftId || shifts[0]?.id) === s.id ? 'bg-navy text-white border-navy' : 'bg-white text-gray-600 border-gray-200 hover:border-navy'}`}
                 >
                   {s.name}
                 </button>
@@ -303,8 +319,8 @@ export default function ExamDetail() {
           {activeShift ? (
             <InvigilatorAssigner
               examId={examId}
-              shiftId={activeShift._id}
-              rooms={activeShift.rooms || []}
+              shiftId={activeShift.id}
+              rooms={activeShift.shiftRooms || []}
             />
           ) : (
             <div className="card p-10 text-center text-gray-400 text-sm">Create shifts first to assign invigilators</div>
@@ -316,7 +332,8 @@ export default function ExamDetail() {
       <Modal
         isOpen={modal.isOpen}
         onClose={modal.close}
-        title={modal.data?._id ? 'Edit Shift' : 'Add Shift'}
+        // FIX: modal.data?.id
+        title={modal.data?.id ? 'Edit Shift' : 'Add Shift'}
         size="xl"
       >
         <ShiftForm

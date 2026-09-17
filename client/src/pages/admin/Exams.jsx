@@ -32,17 +32,17 @@ export default function Exams() {
   }
 
   const onSubmit = (data) => {
-    const fn = modal.data?._id
-      ? () => examsAPI.update(modal.data._id, data)
+    const fn = modal.data?.id
+      ? () => examsAPI.update(modal.data.id, data)
       : () => examsAPI.create(data)
     mutate(fn, {
-      successMsg: modal.data?._id ? 'Exam updated' : 'Exam created',
+      successMsg: modal.data?.id ? 'Exam updated' : 'Exam created',
       onSuccess: () => { modal.close(); refetch() },
     })
   }
 
   const onDelete = () => {
-    mutate(() => examsAPI.delete(confirm.data._id), {
+    mutate(() => examsAPI.delete(confirm.data.id), {
       successMsg: 'Exam deleted',
       onSuccess: () => { confirm.close(); refetch() },
     })
@@ -67,7 +67,7 @@ export default function Exams() {
         <div className="flex gap-1 items-center">
           <button onClick={() => openEdit(r)} disabled={r.isLocked} className="p-1.5 rounded hover:bg-gray-100 text-gray-500 disabled:opacity-30"><Pencil size={13} /></button>
           <button onClick={() => confirm.open(r)} disabled={r.isLocked} className="p-1.5 rounded hover:bg-red-50 text-gray-500 hover:text-red-600 disabled:opacity-30"><Trash2 size={13} /></button>
-          <Link to={`/admin/exams/${r._id}`} className="p-1.5 rounded hover:bg-blue-50 text-blue-500 hover:text-blue-700">
+          <Link to={`/admin/exams/${r.id}`} className="p-1.5 rounded hover:bg-blue-50 text-blue-500 hover:text-blue-700">
             <ChevronRight size={15} />
           </Link>
         </div>
@@ -95,14 +95,14 @@ export default function Exams() {
         <Table columns={columns} data={exams} loading={loading} emptyMessage="No exams created yet" />
       </div>
 
-      <Modal isOpen={modal.isOpen} onClose={modal.close} title={modal.data?._id ? 'Edit Exam' : 'Create Exam'} size="md">
+      <Modal isOpen={modal.isOpen} onClose={modal.close} title={modal.data?.id ? 'Edit Exam' : 'Create Exam'} size="md">
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <Input label="Exam Title" required placeholder="e.g. End Semester Examination Nov 2024" error={errors.title?.message} {...register('title', { required: 'Required' })} />
           <div className="grid grid-cols-2 gap-4">
             <Input label="Academic Year" required placeholder="e.g. 2024-25" error={errors.academicYear?.message} {...register('academicYear', { required: 'Required' })} />
             <Input label="Exam Date" type="date" required error={errors.examDate?.message} {...register('examDate', { required: 'Required' })} />
           </div>
-          {modal.data?._id && (
+          {modal.data?.id && (
             <Select label="Status" {...register('status')}>
               {['draft', 'published', 'ongoing', 'completed'].map((s) => <option key={s} value={s}>{s}</option>)}
             </Select>
