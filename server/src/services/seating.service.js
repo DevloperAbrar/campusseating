@@ -17,6 +17,7 @@ function generateSeatingPlan(students, rooms, rules) {
 
   // ── STEP 1: Prepare seat pools ───────────────────────────────────────────
   let roomPools = rooms
+    .slice()
     .sort((a, b) => a.priority - b.priority)
     .map((room) => {
       const available = room.seats.filter((s) => s.status === "available");
@@ -58,9 +59,8 @@ function generateSeatingPlan(students, rooms, rules) {
   // FIX: reserved seats are carved out for special-needs students. If there were
   // fewer special-needs students than reserved seats (or none at all), the leftover
   // reserved seats used to sit locked out of the standard pool forever — silently
-  // shrinking real capacity below what the UI reported (e.g. "420 seats" while only
-  // 389 were actually placeable). Release any unused reserved seats back into their
-  // room's available pool so everyone else can still be seated.
+  // shrinking real capacity below what the UI reported. Release any unused reserved
+  // seats back into their room's available pool so everyone else can still be seated.
   if (reservedPool.length > 0) {
     for (const seat of reservedPool) {
       const pool = roomPools.find((r) => String(r.roomId) === String(seat.roomId));
@@ -71,114 +71,187 @@ function generateSeatingPlan(students, rooms, rules) {
     }
   }
 
-  // ── STEP 3: Year Separation ──────────────────────────────────────────────
-  // If enabled, assign each year to its own block of rooms
+  // ── STEP 3 / 4: Grouped assignment (year separation, then/or gender separation) ──
+  // FIX (structural): previously, year-separation and gender-separation each carved
+  // out whole ROOMS per group using Math.ceil() on a proportional target. Because
+  // rooms only come in fixed chunks (e.g. 30 seats each), every group except the
+  // last one over-collects and rounds up to the next whole room, wasting seats. The
+  // final group then runs out of rooms — and because all rooms had already been
+  // handed out, there was nothing left for the old "overflow" fallback to use, even
+  // though the seats those earlier groups wasted were sitting empty the whole time.
+  // Example that was actually reproduced: 14 rooms × 30 seats (420 total) for
+  // 361 students split 95/92/88/86 across 4 years — years 1–3 wasted 85 seats
+  // between them on rounding, year 4 came up 26 seats short, and 0 rooms were left
+  // for the safety net to use.
+  //
+  // Fix: still assign each group to its own room block first (so branch/pairing
+  // rules still see clean per-group room pools), but afterwards run a single
+  // universal reconciliation pass (see reconcileUnseated below) that looks at every
+  // seat still truly unused ANYWHERE — including leftover seats inside another
+  // group's block — and places any still-unseated student there. This guarantees
+  // that as long as total capacity >= total demand, nobody is left unseated just
+  // because of room-size rounding.
   if (rules.yearSeparation && roomPools.length > 1) {
-    const yearGroups = {};
-    for (const s of remaining) {
-      const y = s.year || "unknown";
-      if (!yearGroups[y]) yearGroups[y] = [];
-      yearGroups[y].push(s);
-    }
-    const years = Object.keys(yearGroups).sort();
-    const totalSeats = roomPools.reduce((acc, r) => acc + r.capacity, 0);
+    assignByGroups(remaining, "year", roomPools, rules, assignments, warnings);
+  } else if (rules.genderSeparation === "rooms" || rules.genderSeparation === "rows") {
+    assignByGender(remaining, roomPools, rules, assignments, warnings);
+  } else {
+    // ── STEP 5: Main Assignment ─────────────────────────────────────────────
+    // Spread mode: reorder room pools so students are distributed evenly
+    const activePools =
+      rules.roomFillStrategy === "spread"
+        ? buildSpreadPools(remaining.length, roomPools)
+        : roomPools;
 
-    let poolCursor = 0;
-    const assignedInYear = new Set();
-
-    for (const year of years) {
-      const group = yearGroups[year];
-      const proportion = group.length / remaining.length;
-      const targetSeats = Math.ceil(totalSeats * proportion);
-
-      // Collect enough rooms for this year
-      const yearPools = [];
-      let collected = 0;
-      while (poolCursor < roomPools.length && collected < targetSeats) {
-        yearPools.push(roomPools[poolCursor]);
-        collected += roomPools[poolCursor].capacity;
-        poolCursor++;
-      }
-
-      assignGroup(group, yearPools, rules, assignments, warnings);
-      // FIX: only mark students who actually received a seat. The old code marked
-      // the whole group "assigned" just for being processed, so if a year's room
-      // slice ran short (rounding, or a room with fewer real seats than expected),
-      // the leftover students in that group were never retried against the
-      // overflow rooms below — they just vanished into "unassigned" with no
-      // second chance, even though free seats existed elsewhere.
-      const seatedIds = new Set(assignments.map((a) => String(a.studentId)));
-      group.forEach((s) => { if (seatedIds.has(String(s._id))) assignedInYear.add(String(s._id)); });
-    }
-
-    // Any overflow (including anyone whose year-block ran out of room) goes to remaining rooms
-    const overflow = remaining.filter((s) => !assignedInYear.has(String(s._id)));
-    if (overflow.length && poolCursor < roomPools.length) {
-      assignGroup(overflow, roomPools.slice(poolCursor), rules, assignments, warnings);
-    }
-
-    const allAssignedIds = new Set(assignments.map((a) => String(a.studentId)));
-    const unassigned = students.filter((s) => !allAssignedIds.has(String(s._id)));
-    return { assignments, unassigned, warnings };
+    assignGroup(remaining, activePools, rules, assignments, warnings);
   }
 
-  // ── STEP 4: Gender Separation ─────────────────────────────────────────────
-  if (rules.genderSeparation === "rooms" || rules.genderSeparation === "rows") {
-    const female = remaining.filter((s) => s.gender === "female");
-    const male   = remaining.filter((s) => s.gender !== "female");
-    const femaleProportion = female.length / (remaining.length || 1);
-
-    let femalePools, malePools;
-
-    if (rules.genderSeparation === "rooms") {
-      const split = Math.ceil(roomPools.length * femaleProportion);
-      femalePools = roomPools.slice(0, Math.max(1, split));
-      malePools   = roomPools.slice(Math.max(1, split));
-    } else {
-      // FIX: "rows" was advertised in the UI (AlgorithmConfig) but had no
-      // implementation here at all — picking it silently behaved like "None".
-      // Split each room's own rows proportionally instead of whole rooms, so
-      // female students take the earliest rows in every room and male students
-      // take the rest.
-      femalePools = [];
-      malePools = [];
-      for (const pool of roomPools) {
-        const rowGroups = {};
-        for (const seat of pool.available) {
-          if (!rowGroups[seat.row]) rowGroups[seat.row] = [];
-          rowGroups[seat.row].push(seat);
-        }
-        const rowKeys = Object.keys(rowGroups).sort();
-        const femaleRowCount = Math.min(
-          rowKeys.length,
-          Math.max(femaleProportion > 0 ? 1 : 0, Math.round(rowKeys.length * femaleProportion))
-        );
-        const femaleSeats = rowKeys.slice(0, femaleRowCount).flatMap((r) => rowGroups[r]);
-        const maleSeats   = rowKeys.slice(femaleRowCount).flatMap((r) => rowGroups[r]);
-        if (femaleSeats.length) femalePools.push({ ...pool, available: femaleSeats });
-        if (maleSeats.length) malePools.push({ ...pool, available: maleSeats });
-      }
-    }
-
-    assignGroup(female, femalePools, rules, assignments, warnings);
-    assignGroup(male,   malePools,   rules, assignments, warnings);
-    const allAssignedIds = new Set(assignments.map((a) => String(a.studentId)));
-    const unassigned = students.filter((s) => !allAssignedIds.has(String(s._id)));
-    return { assignments, unassigned, warnings };
-  }
-
-  // ── STEP 5: Main Assignment ───────────────────────────────────────────────
-  // Spread mode: reorder room pools so students are distributed evenly
-  const activePools =
-    rules.roomFillStrategy === "spread"
-      ? buildSpreadPools(remaining.length, roomPools)
-      : roomPools;
-
-  assignGroup(remaining, activePools, rules, assignments, warnings);
+  // ── FINAL SAFETY NET ─────────────────────────────────────────────────────
+  // Runs after every path above (year separation, gender separation, or plain
+  // fill). Catches anyone still unseated and tries every seat that is truly
+  // still empty, anywhere, regardless of which group's "block" it originally
+  // belonged to. This is what actually fixes the year/gender rounding bug —
+  // without it, the room-block partitioning above can strand students next to
+  // empty seats in a neighboring block.
+  reconcileUnseated(students, roomPools, rules, assignments, warnings);
 
   const allAssignedIds = new Set(assignments.map((a) => String(a.studentId)));
   const unassigned = students.filter((s) => !allAssignedIds.has(String(s._id)));
+
+  if (unassigned.length > 0) {
+    const totalCapacity = roomPools.reduce((sum, r) => sum + r.available.length, 0);
+    if (totalCapacity < students.length) {
+      warnings.push(
+        `Total seat capacity (${totalCapacity}) is less than total students (${students.length}) — ${unassigned.length} student(s) genuinely have nowhere to sit.`
+      );
+    } else {
+      warnings.push(
+        `${unassigned.length} student(s) could not be seated even though total capacity was sufficient — likely due to strict seating-rule constraints (e.g. too few distinct branches to satisfy strict branch separation on the remaining seats).`
+      );
+    }
+  }
+
   return { assignments, unassigned, warnings };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// assignByGroups — generic proportional room-block assignment used by
+// year-separation. Groups students by the given key ("year"), gives each group
+// its own block of rooms sized proportionally to its share of students, then
+// seats each group within its block. Any shortfall from room-size rounding is
+// caught later by reconcileUnseated().
+// ─────────────────────────────────────────────────────────────────────────────
+
+function assignByGroups(remainingStudents, groupKey, roomPools, rules, assignments, warnings) {
+  const groups = {};
+  for (const s of remainingStudents) {
+    const key = s[groupKey] || "unknown";
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(s);
+  }
+  const keys = Object.keys(groups).sort();
+  const totalSeats = roomPools.reduce((acc, r) => acc + r.capacity, 0);
+  const totalStudentsInGroups = remainingStudents.length || 1;
+
+  let poolCursor = 0;
+  for (const key of keys) {
+    const group = groups[key];
+    const proportion = group.length / totalStudentsInGroups;
+    const targetSeats = Math.ceil(totalSeats * proportion);
+
+    const groupPools = [];
+    let collected = 0;
+    while (poolCursor < roomPools.length && collected < targetSeats) {
+      groupPools.push(roomPools[poolCursor]);
+      collected += roomPools[poolCursor].capacity;
+      poolCursor++;
+    }
+
+    assignGroup(group, groupPools, rules, assignments, warnings);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// assignByGender — "rooms" mode carves out whole rooms (same proportional
+// approach as assignByGroups); "rows" mode splits each room's own rows
+// proportionally instead, so it isn't subject to the same whole-room rounding.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function assignByGender(remainingStudents, roomPools, rules, assignments, warnings) {
+  const female = remainingStudents.filter((s) => s.gender === "female");
+  const male   = remainingStudents.filter((s) => s.gender !== "female");
+  const femaleProportion = female.length / (remainingStudents.length || 1);
+
+  let femalePools, malePools;
+
+  if (rules.genderSeparation === "rooms") {
+    const split = Math.ceil(roomPools.length * femaleProportion);
+    femalePools = roomPools.slice(0, Math.max(1, split));
+    malePools   = roomPools.slice(Math.max(1, split));
+  } else {
+    // "rows": split each room's own rows proportionally, so female students take
+    // the earliest rows in every room and male students take the rest.
+    femalePools = [];
+    malePools = [];
+    for (const pool of roomPools) {
+      const rowGroups = {};
+      for (const seat of pool.available) {
+        if (!rowGroups[seat.row]) rowGroups[seat.row] = [];
+        rowGroups[seat.row].push(seat);
+      }
+      const rowKeys = Object.keys(rowGroups).sort();
+      const femaleRowCount = Math.min(
+        rowKeys.length,
+        Math.max(femaleProportion > 0 ? 1 : 0, Math.round(rowKeys.length * femaleProportion))
+      );
+      const femaleSeats = rowKeys.slice(0, femaleRowCount).flatMap((r) => rowGroups[r]);
+      const maleSeats   = rowKeys.slice(femaleRowCount).flatMap((r) => rowGroups[r]);
+      if (femaleSeats.length) femalePools.push({ ...pool, available: femaleSeats });
+      if (maleSeats.length) malePools.push({ ...pool, available: maleSeats });
+    }
+  }
+
+  assignGroup(female, femalePools, rules, assignments, warnings);
+  assignGroup(male,   malePools,   rules, assignments, warnings);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// reconcileUnseated — universal safety net. Finds every student not yet in
+// `assignments` and every seat not yet used by `assignments` (scanning ALL
+// room pools, not just whichever block a group was given), then makes one
+// more best-effort standard-fill pass. This is what prevents room-size
+// rounding in year/gender separation from stranding students next to seats
+// that are technically empty but belong to a different group's block.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function reconcileUnseated(students, roomPools, rules, assignments, warnings) {
+  const assignedIds = new Set(assignments.map((a) => String(a.studentId)));
+  const stillUnseated = students.filter((s) => !s.specialNeeds && !assignedIds.has(String(s._id)));
+  // Special-needs students who never found any seat at all (extremely rare —
+  // only happens if total capacity is short) are handled too, so they aren't
+  // silently dropped just because they came from a different code path.
+  const stillUnseatedSpecials = students.filter((s) => s.specialNeeds && !assignedIds.has(String(s._id)));
+  const candidates = [...stillUnseated, ...stillUnseatedSpecials];
+  if (!candidates.length) return;
+
+  const usedSeatKeys = new Set(assignments.map((a) => `${a.roomId}-${a.seatId}`));
+  const leftoverPools = roomPools
+    .map((pool) => ({
+      ...pool,
+      available: pool.available.filter((seat) => !usedSeatKeys.has(`${pool.roomId}-${seat.seatId}`)),
+    }))
+    .filter((pool) => pool.available.length > 0);
+
+  if (!leftoverPools.length) return; // genuinely no seats left anywhere
+
+  const before = assignments.length;
+  assignStandard(candidates, leftoverPools, rules, assignments, warnings);
+  const placed = assignments.length - before;
+  if (placed > 0) {
+    warnings.push(
+      `${placed} student(s) required a second pass to seat (room-block rounding) — they were placed on leftover seats outside their primary block.`
+    );
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -219,7 +292,9 @@ function assignGroup(students, roomPools, rules, assignments, warnings) {
 // BLOCK-COLUMN MODE
 // Each bench-position column is owned by exactly one branch.
 // Fill order: all rows top-to-bottom for each column, across all rooms.
-// If a branch runs out early → that column's remaining seats stay empty.
+// If a branch runs out of dedicated columns before its queue is empty, the
+// leftover students fall through to standard fill on whatever columns remain
+// (same as originally-unpaired students) instead of being silently dropped.
 // ─────────────────────────────────────────────────────────────────────────────
 
 function assignBlockColumn(students, roomPools, rules, assignments, warnings) {
@@ -279,11 +354,22 @@ function assignBlockColumn(students, roomPools, rules, assignments, warnings) {
     }
   }
 
-  // Standard fill for unpaired students on remaining columns
-  if (unpairedStudents.length > 0 && colIdx < activeColumns.length) {
+  // FIX: previously, any pair whose columns ran out before its queue emptied
+  // (e.g. one branch in the pair is much larger than the block gave it credit
+  // for) just silently lost those students — they were never added to the
+  // fallback fill. Now any leftover queued students are folded into the
+  // fallback pool alongside genuinely unpaired students.
+  const leftoverPaired = pairQueues.flat().flat();
+
+  // Standard fill for unpaired + leftover-paired students on remaining columns
+  const fallbackStudents = [...unpairedStudents, ...leftoverPaired];
+  if (fallbackStudents.length > 0 && colIdx < activeColumns.length) {
     const remainingCols = activeColumns.slice(colIdx);
     const tempPools = buildTempPoolsFromColumns(remainingCols, roomPools);
-    assignStandard(unpairedStudents, tempPools, rules, assignments, warnings);
+    assignStandard(fallbackStudents, tempPools, rules, assignments, warnings);
+  } else if (fallbackStudents.length > 0) {
+    // No columns left at all in this room block — leave them for the caller's
+    // reconciliation pass rather than silently dropping them here.
   }
 }
 
@@ -297,6 +383,7 @@ function assignStandard(students, roomPools, rules, assignments, warnings) {
   const gapSeating = normalizeGap(rules.gapSeating);
 
   let pointer = 0;
+  let forcedSameBranch = 0;
 
   for (const roomPool of roomPools) {
     if (pointer >= sorted.length) break;
@@ -334,11 +421,9 @@ function assignStandard(students, roomPools, rules, assignments, warnings) {
 
         // Strict branch separation
         if (rules.branchSeparationMode === "strict") {
-          // FIX: bench numbers restart at 1 in every row (see createRoom), so
-          // matching on `a.bench === seat.bench` alone treated bench 3 in row A
-          // and bench 3 in row B as the same physical bench — wrongly barring
-          // branches from rows they'd never actually share a desk in. Row must
-          // match too.
+          // Bench numbers restart at 1 in every row, so row must be matched
+          // alongside bench number — otherwise bench 3 in row A and bench 3 in
+          // row B would be wrongly treated as the same physical bench.
           const benchAssigned = assignments.filter(
             (a) => String(a.roomId) === String(roomPool.roomId) && a.row === seat.row && a.bench === seat.bench
           );
@@ -350,6 +435,13 @@ function assignStandard(students, roomPools, rules, assignments, warnings) {
             if (swapIdx !== -1) {
               [sorted[pointer], sorted[swapIdx]] = [sorted[swapIdx], sorted[pointer]];
               student = sorted[pointer];
+            } else {
+              // No student left who wouldn't collide — every remaining student
+              // shares a branch with someone already on this bench. We still
+              // seat them (never drop a student over a soft preference) but
+              // count it so the caller can be told strict separation wasn't
+              // fully achievable with this student/room mix.
+              forcedSameBranch++;
             }
           }
         }
@@ -368,6 +460,12 @@ function assignStandard(students, roomPools, rules, assignments, warnings) {
         pointer++;
       }
     }
+  }
+
+  if (forcedSameBranch > 0) {
+    warnings.push(
+      `Strict branch separation could not be fully honored for ${forcedSameBranch} seat(s) — too few distinct branches remaining for the available benches.`
+    );
   }
 }
 
