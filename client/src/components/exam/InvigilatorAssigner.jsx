@@ -8,20 +8,20 @@ import { ConfirmModal } from '../shared/index.jsx'
 
 export default function InvigilatorAssigner({ examId, shiftId, rooms = [] }) {
   // ── Normalize rooms ────────────────────────────────────────────────────────
-  // The shift.rooms array contains objects shaped like:
-  //   { room: { _id, name, usableCapacity }, priority, usableCapacity }
-  // OR sometimes plain room objects { _id, name, ... }
-  // Normalize everything to { _id, name } for consistent use below.
+  // Prisma returns .id (not ._id). shiftRooms from getShifts are shaped like:
+  //   { roomId, room: { id, name, usableCapacity }, priority, usableCapacity }
+  // OR sometimes plain room objects { id, name, ... }
+  // Normalize everything to { id, name } for consistent use below.
   const normalizedRooms = rooms.map((r) => {
     if (r.room && typeof r.room === 'object') {
-      // shift-room object: { room: { _id, name }, priority, ... }
-      return { _id: r.room._id, name: r.room.name }
+      // shift-room object: use r.roomId (always present) or r.room.id
+      return { id: r.roomId || r.room.id, name: r.room.name }
     }
     // plain room object
-    return { _id: r._id, name: r.name }
+    return { id: r.id, name: r.name }
   })
 
-  const [selectedRoom, setSelectedRoom] = useState(normalizedRooms[0]?._id || '')
+  const [selectedRoom, setSelectedRoom] = useState(normalizedRooms[0]?.id || '')
   const [selectedFaculty, setSelectedFaculty] = useState('')
   const [confirmRemove, setConfirmRemove] = useState(null)
   const { mutate, loading: ml } = useMutation()
@@ -48,22 +48,22 @@ export default function InvigilatorAssigner({ examId, shiftId, rooms = [] }) {
   }
 
   const handleRemove = () => {
-    mutate(() => invigilatorsAPI.remove(examId, shiftId, confirmRemove._id), {
+    mutate(() => invigilatorsAPI.remove(examId, shiftId, confirmRemove.id), {
       successMsg: 'Invigilator removed',
       onSuccess: () => { setConfirmRemove(null); refetch() },
     })
   }
 
   // ── Group assignments by room ──────────────────────────────────────────────
-  // Build the map using normalizedRooms so keys are always plain _id strings
+  // Build the map using normalizedRooms so keys are always plain id strings
   const byRoom = {}
   normalizedRooms.forEach((r) => {
-    byRoom[r._id] = { room: r, faculty: [] }
+    byRoom[r.id] = { room: r, faculty: [] }
   })
 
   assignments?.forEach((a) => {
     // assignment.room may be a populated object or just an id string
-    const rId = a.room?._id || a.room
+    const rId = a.room?.id || a.room?.roomId || a.roomId || a.room
     if (byRoom[rId]) {
       byRoom[rId].faculty.push(a)
     }
@@ -78,7 +78,7 @@ export default function InvigilatorAssigner({ examId, shiftId, rooms = [] }) {
           <select className="input" value={selectedRoom} onChange={(e) => setSelectedRoom(e.target.value)}>
             <option value="">Select room…</option>
             {normalizedRooms.map((r) => (
-              <option key={r._id} value={r._id}>{r.name}</option>
+              <option key={r.id} value={r.id}>{r.name}</option>
             ))}
           </select>
         </div>
@@ -87,7 +87,7 @@ export default function InvigilatorAssigner({ examId, shiftId, rooms = [] }) {
           <select className="input" value={selectedFaculty} onChange={(e) => setSelectedFaculty(e.target.value)}>
             <option value="">Select faculty…</option>
             {faculty?.map((f) => (
-              <option key={f._id} value={f._id}>{f.name} ({f.designation})</option>
+              <option key={f.id} value={f.id}>{f.name} ({f.designation})</option>
             ))}
           </select>
         </div>
@@ -98,7 +98,7 @@ export default function InvigilatorAssigner({ examId, shiftId, rooms = [] }) {
 
       {/* Current assignments by room */}
       {Object.values(byRoom).map(({ room, faculty: fas }) => (
-        <div key={room._id} className="card">
+        <div key={room.id} className="card">
           <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
             <div className="flex items-center gap-2">
               <UserCheck size={14} className="text-gray-400" />
@@ -113,7 +113,7 @@ export default function InvigilatorAssigner({ examId, shiftId, rooms = [] }) {
           ) : (
             <ul className="divide-y divide-gray-50">
               {fas.map((a) => (
-                <li key={a._id} className="px-4 py-2.5 flex items-center justify-between">
+                <li key={a.id} className="px-4 py-2.5 flex items-center justify-between">
                   <div>
                     <p className="text-sm font-medium">{a.faculty?.name}</p>
                     <p className="text-xs text-gray-400">{a.faculty?.designation} · {a.faculty?.email}</p>

@@ -121,7 +121,8 @@ const getSeatLabelsPDF = asyncHandler(async (req, res) => {
   if (!exam || !shift || !room) throw new ApiError(404, "Not found");
 
   const { assignments } = await fetchRoomData(shiftId, roomId);
-  const html = generateSeatLabelsHTML(room, assignments, variant);
+  // generateSeatLabelsHTML expects ({ room, assignments }[], variant) — pass as single-room array
+  const html = generateSeatLabelsHTML([{ room, assignments }], variant);
   const pdf = await htmlToPDF(html);
 
   res.setHeader("Content-Type", "application/pdf");
@@ -152,7 +153,7 @@ const getAllSeatLabelsPDF = asyncHandler(async (req, res) => {
   try {
     for (const room of rooms) {
       const { assignments } = await fetchRoomData(shiftId, room.id);
-      const html = generateSeatLabelsHTML(room, assignments, variant);
+      const html = generateSeatLabelsHTML([{ room, assignments }], variant);
       const pdf = await renderPDFOnBrowser(browser, html);
       archive.append(Buffer.from(pdf), { name: `${room.name.replace(/\s+/g, "_")}_labels_${variant}.pdf` });
     }
@@ -180,7 +181,7 @@ const getAllSeatLabelsMergedPDF = asyncHandler(async (req, res) => {
   try {
     for (const room of rooms) {
       const { assignments } = await fetchRoomData(shiftId, room.id);
-      const html = generateSeatLabelsHTML(room, assignments, variant);
+      const html = generateSeatLabelsHTML([{ room, assignments }], variant);
       pdfBuffers.push(await renderPDFOnBrowser(browser, html));
     }
   } finally {
