@@ -55,6 +55,22 @@ function generateSeatingPlan(students, rooms, rules) {
     }
   }
 
+  // FIX: reserved seats are carved out for special-needs students. If there were
+  // fewer special-needs students than reserved seats (or none at all), the leftover
+  // reserved seats used to sit locked out of the standard pool forever — silently
+  // shrinking real capacity below what the UI reported (e.g. "420 seats" while only
+  // 389 were actually placeable). Release any unused reserved seats back into their
+  // room's available pool so everyone else can still be seated.
+  if (reservedPool.length > 0) {
+    for (const seat of reservedPool) {
+      const pool = roomPools.find((r) => String(r.roomId) === String(seat.roomId));
+      if (pool) {
+        pool.available.push(seat);
+        pool.capacity += 1;
+      }
+    }
+  }
+
   // ── STEP 3: Year Separation ──────────────────────────────────────────────
   // If enabled, assign each year to its own block of rooms
   if (rules.yearSeparation && roomPools.length > 1) {
@@ -85,10 +101,17 @@ function generateSeatingPlan(students, rooms, rules) {
       }
 
       assignGroup(group, yearPools, rules, assignments, warnings);
-      group.forEach((s) => assignedInYear.add(String(s._id)));
+      // FIX: only mark students who actually received a seat. The old code marked
+      // the whole group "assigned" just for being processed, so if a year's room
+      // slice ran short (rounding, or a room with fewer real seats than expected),
+      // the leftover students in that group were never retried against the
+      // overflow rooms below — they just vanished into "unassigned" with no
+      // second chance, even though free seats existed elsewhere.
+      const seatedIds = new Set(assignments.map((a) => String(a.studentId)));
+      group.forEach((s) => { if (seatedIds.has(String(s._id))) assignedInYear.add(String(s._id)); });
     }
 
-    // Any overflow goes to remaining rooms
+    // Any overflow (including anyone whose year-block ran out of room) goes to remaining rooms
     const overflow = remaining.filter((s) => !assignedInYear.has(String(s._id)));
     if (overflow.length && poolCursor < roomPools.length) {
       assignGroup(overflow, roomPools.slice(poolCursor), rules, assignments, warnings);
@@ -99,17 +122,48 @@ function generateSeatingPlan(students, rooms, rules) {
     return { assignments, unassigned, warnings };
   }
 
-  // ── STEP 4: Gender Separation by Rooms ───────────────────────────────────
-  if (rules.genderSeparation === "rooms") {
+  // ── STEP 4: Gender Separation ─────────────────────────────────────────────
+  if (rules.genderSeparation === "rooms" || rules.genderSeparation === "rows") {
     const female = remaining.filter((s) => s.gender === "female");
     const male   = remaining.filter((s) => s.gender !== "female");
-    const split  = Math.ceil(roomPools.length * (female.length / (remaining.length || 1)));
-    const femaleRooms = roomPools.slice(0, Math.max(1, split));
-    const maleRooms   = roomPools.slice(Math.max(1, split));
-    assignGroup(female, femaleRooms, rules, assignments, warnings);
-    assignGroup(male,   maleRooms,   rules, assignments, warnings);
+    const femaleProportion = female.length / (remaining.length || 1);
+
+    let femalePools, malePools;
+
+    if (rules.genderSeparation === "rooms") {
+      const split = Math.ceil(roomPools.length * femaleProportion);
+      femalePools = roomPools.slice(0, Math.max(1, split));
+      malePools   = roomPools.slice(Math.max(1, split));
+    } else {
+      // FIX: "rows" was advertised in the UI (AlgorithmConfig) but had no
+      // implementation here at all — picking it silently behaved like "None".
+      // Split each room's own rows proportionally instead of whole rooms, so
+      // female students take the earliest rows in every room and male students
+      // take the rest.
+      femalePools = [];
+      malePools = [];
+      for (const pool of roomPools) {
+        const rowGroups = {};
+        for (const seat of pool.available) {
+          if (!rowGroups[seat.row]) rowGroups[seat.row] = [];
+          rowGroups[seat.row].push(seat);
+        }
+        const rowKeys = Object.keys(rowGroups).sort();
+        const femaleRowCount = Math.min(
+          rowKeys.length,
+          Math.max(femaleProportion > 0 ? 1 : 0, Math.round(rowKeys.length * femaleProportion))
+        );
+        const femaleSeats = rowKeys.slice(0, femaleRowCount).flatMap((r) => rowGroups[r]);
+        const maleSeats   = rowKeys.slice(femaleRowCount).flatMap((r) => rowGroups[r]);
+        if (femaleSeats.length) femalePools.push({ ...pool, available: femaleSeats });
+        if (maleSeats.length) malePools.push({ ...pool, available: maleSeats });
+      }
+    }
+
+    assignGroup(female, femalePools, rules, assignments, warnings);
+    assignGroup(male,   malePools,   rules, assignments, warnings);
     const allAssignedIds = new Set(assignments.map((a) => String(a.studentId)));
-    const unassigned = remaining.filter((s) => !allAssignedIds.has(String(s._id)));
+    const unassigned = students.filter((s) => !allAssignedIds.has(String(s._id)));
     return { assignments, unassigned, warnings };
   }
 
@@ -280,8 +334,13 @@ function assignStandard(students, roomPools, rules, assignments, warnings) {
 
         // Strict branch separation
         if (rules.branchSeparationMode === "strict") {
+          // FIX: bench numbers restart at 1 in every row (see createRoom), so
+          // matching on `a.bench === seat.bench` alone treated bench 3 in row A
+          // and bench 3 in row B as the same physical bench — wrongly barring
+          // branches from rows they'd never actually share a desk in. Row must
+          // match too.
           const benchAssigned = assignments.filter(
-            (a) => String(a.roomId) === String(roomPool.roomId) && a.bench === seat.bench
+            (a) => String(a.roomId) === String(roomPool.roomId) && a.row === seat.row && a.bench === seat.bench
           );
           const usedBranches = new Set(benchAssigned.map((a) => String(a.branchId)));
           if (benchAssigned.length > 0 && usedBranches.has(String(student.branch))) {
