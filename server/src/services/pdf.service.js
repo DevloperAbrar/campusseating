@@ -385,19 +385,43 @@ const generateSeatLabelsHTML = (roomsData, variant = 'detailed') => {
 // bundled/installed Chromium (set PUPPETEER_EXECUTABLE_PATH in .env
 // only if you specifically need to point at a system Chrome).
 const launchBrowser = async () => {
-  // headless: "new" was removed in Puppeteer v21 — use boolean true.
-  // --disable-dev-shm-usage is mandatory on Linux VPS/Docker: the default /dev/shm
-  // is only 64MB which Chrome fills instantly and crashes silently without this flag.
+  // Resolve Chrome executable:
+  // 1. Honour explicit env override (set PUPPETEER_EXECUTABLE_PATH in .env if needed)
+  // 2. Ask puppeteer for the path to the Chrome it downloaded during npm install
+  //    (executablePath() is async in puppeteer v21+)
+  // 3. Fall back to common system paths
+  let executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || null;
+  if (!executablePath) {
+    try {
+      executablePath = await puppeteer.executablePath();
+    } catch (_) {
+      // executablePath() throws if Chrome was never downloaded
+    }
+  }
+  if (!executablePath) {
+    const fs = require("fs");
+    const candidates = [
+      "/usr/bin/chromium-browser",
+      "/usr/bin/chromium",
+      "/usr/bin/google-chrome",
+      "/usr/bin/google-chrome-stable",
+    ];
+    executablePath = candidates.find((p) => fs.existsSync(p)) || undefined;
+  }
+
+  // headless: "new" was removed in Puppeteer v21 — boolean true is correct for v21+.
+  // --disable-dev-shm-usage: mandatory on Linux VPS/Docker — /dev/shm is only 64 MB
+  //   and Chrome fills it immediately, causing a silent crash without this flag.
+  // --no-zygote + --single-process removed: they conflict with each other in Chrome 131+
+  //   and cause crashes on multi-core systems.
   return puppeteer.launch({
     headless: true,
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+    executablePath: executablePath || undefined,
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
       "--disable-gpu",
-      "--no-zygote",
-      "--single-process",
     ],
   });
 };
