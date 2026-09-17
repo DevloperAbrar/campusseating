@@ -42,22 +42,27 @@ export default function Students() {
 
   const openAdd = () => { reset({}); modal.open(null) }
   const openEdit = (row) => {
-    reset({ ...row, branch: row.branch?._id, department: row.department?._id, stream: row.stream?._id })
+    reset({
+      ...row,
+      branch: row.branch?.id || row.branchId,
+      department: row.department?.id || row.departmentId,
+      stream: row.stream?.id || row.streamId,
+    })
     modal.open(row)
   }
 
   const onSubmit = (data) => {
-    const fn = modal.data?._id
-      ? () => studentsAPI.update(modal.data._id, data)
+    const fn = modal.data?.id
+      ? () => studentsAPI.update(modal.data.id, data)
       : () => studentsAPI.create(data)
     mutate(fn, {
-      successMsg: modal.data?._id ? 'Student updated' : 'Student added',
+      successMsg: modal.data?.id ? 'Student updated' : 'Student added',
       onSuccess: () => { modal.close(); refetch() },
     })
   }
 
   const onDelete = () => {
-    mutate(() => studentsAPI.delete(confirm.data._id), {
+    mutate(() => studentsAPI.delete(confirm.data.id), {
       successMsg: 'Student deactivated',
       onSuccess: () => { confirm.close(); refetch() },
     })
@@ -109,7 +114,7 @@ export default function Students() {
         </div>
         <Select className="min-w-36" value={filterBranch} onChange={(e) => { setFilterBranch(e.target.value); setPage(1) }}>
           <option value="">All Branches</option>
-          {branches?.map((b) => <option key={b._id} value={b._id}>{b.code} — {b.name}</option>)}
+          {branches?.map((b) => <option key={b.id} value={b.id}>{b.code} — {b.name}</option>)}
         </Select>
         <Select className="min-w-28" value={filterYear} onChange={(e) => { setFilterYear(e.target.value); setPage(1) }}>
           <option value="">All Years</option>
@@ -128,7 +133,7 @@ export default function Students() {
       </Modal>
 
       {/* Add/Edit Modal */}
-      <Modal isOpen={modal.isOpen} onClose={modal.close} title={modal.data?._id ? 'Edit Student' : 'Add Student'} size="md">
+      <Modal isOpen={modal.isOpen} onClose={modal.close} title={modal.data?.id ? 'Edit Student' : 'Add Student'} size="md">
         <form onSubmit={handleSubmit(onSubmit)} className="grid grid-cols-2 gap-4">
           <div className="col-span-2">
             <Input label="Full Name" required error={errors.name?.message} {...register('name', { required: 'Required' })} />
@@ -137,15 +142,15 @@ export default function Students() {
           <Input label="Enrollment No" required error={errors.enrollmentNo?.message} {...register('enrollmentNo', { required: 'Required' })} />
           <Select label="Stream" required error={errors.stream?.message} {...register('stream', { required: 'Required' })}>
             <option value="">Select…</option>
-            {streams?.map((s) => <option key={s._id} value={s._id}>{s.name}</option>)}
+            {streams?.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </Select>
           <Select label="Department" required error={errors.department?.message} {...register('department', { required: 'Required' })}>
             <option value="">Select…</option>
-            {departments?.map((d) => <option key={d._id} value={d._id}>{d.name}</option>)}
+            {departments?.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
           </Select>
           <Select label="Branch" required error={errors.branch?.message} {...register('branch', { required: 'Required' })}>
             <option value="">Select…</option>
-            {branches?.map((b) => <option key={b._id} value={b._id}>{b.code} — {b.name}</option>)}
+            {branches?.map((b) => <option key={b.id} value={b.id}>{b.code} — {b.name}</option>)}
           </Select>
           <Select label="Year" required {...register('year', { required: 'Required', valueAsNumber: true })}>
             <option value="">Select…</option>
