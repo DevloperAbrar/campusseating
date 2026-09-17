@@ -42,13 +42,21 @@ const logout = asyncHandler(async (req, res) => {
 });
 
 const me = asyncHandler(async (req, res) => {
+  // req.college is NOT set here — tenantMiddleware is not applied to /me
+  // So we fetch the college directly from the JWT's collegeId
+  if (!req.user?.collegeId) throw new ApiError(401, "Invalid session — please login again");
+
+  const college = await prisma.college.findUnique({ where: { id: req.user.collegeId } });
+  if (!college) throw new ApiError(401, "College not found — please login again");
+
   res.json(new ApiResponse(200, "Admin info", {
     email: req.user.email,
     role: req.user.role,
-    collegeName: req.college.name,
-    plan: req.college.plan,
-    status: req.college.status,
-    renewalDate: req.college.renewalDate,
+    collegeName: college.name,
+    collegeCode: college.code,
+    plan: college.plan,
+    status: college.status,
+    renewalDate: college.renewalDate,
   }));
 });
 
