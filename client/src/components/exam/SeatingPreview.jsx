@@ -66,9 +66,9 @@ function RoomBlock({ roomData, examId, shiftId, onSwapped, swapState, onSelectFo
                     .sort((a, b) => a.bench - b.bench || a.position.localeCompare(b.position))
                     .map((a) => (
                       <StudentPill
-                        key={a._id}
+                        key={a.id}
                         assignment={a}
-                        selected={swapState?.selected?._id === a._id}
+                        selected={swapState?.selected?.id === a.id}
                         onSelect={onSelectForSwap}
                       />
                     ))}
@@ -92,14 +92,14 @@ export default function SeatingPreview({ data = [], examId, shiftId, onRefresh }
       return
     }
 
-    if (swapState.selected._id === assignment._id) {
+    if (swapState.selected.id === assignment.id) {
       setSwapState({ selected: null, loading: false })
       return
     }
 
     // Do swap
-    const studentA = swapState.selected.student?._id
-    const studentB = assignment.student?._id
+    const studentA = swapState.selected.student?.id
+    const studentB = assignment.student?.id
 
     setSwapState((s) => ({ ...s, loading: true }))
     seatingAPI
@@ -142,7 +142,7 @@ export default function SeatingPreview({ data = [], examId, shiftId, onRefresh }
 
       {data.map((roomData, i) => (
         <RoomBlock
-          key={roomData.room?._id || i}
+          key={roomData.room?.id || i}
           roomData={roomData}
           examId={examId}
           shiftId={shiftId}

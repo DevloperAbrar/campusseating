@@ -61,19 +61,19 @@ function PDFDrawer({ open, onClose, activeShift, examId, previewData, dlLoading,
 
   const downloadAllRooms = (mode) =>
     mode === 'zip'
-      ? download(() => pdfAPI.allRoomsPDF(examId, activeShift._id), `room_charts_${shiftName}.zip`)
-      : download(() => pdfAPI.allRoomsMergedPDF(examId, activeShift._id), `all_rooms_${shiftName}.pdf`)
+      ? download(() => pdfAPI.allRoomsPDF(examId, activeShift.id), `room_charts_${shiftName}.zip`)
+      : download(() => pdfAPI.allRoomsMergedPDF(examId, activeShift.id), `all_rooms_${shiftName}.pdf`)
 
   const downloadRoom = (roomId, roomName) =>
-    download(() => pdfAPI.roomPDF(examId, activeShift._id, roomId), `${roomName.replace(/\s+/g, '_')}_seating.pdf`)
+    download(() => pdfAPI.roomPDF(examId, activeShift.id, roomId), `${roomName.replace(/\s+/g, '_')}_seating.pdf`)
 
   const downloadAllLabels = (variant, mode) =>
     mode === 'zip'
-      ? download(() => pdfAPI.allRoomsLabelsPDF(examId, activeShift._id, variant), `seat_labels_${variant}_${shiftName}.zip`)
-      : download(() => pdfAPI.allRoomsLabelsMergedPDF(examId, activeShift._id, variant), `all_labels_${variant}_${shiftName}.pdf`)
+      ? download(() => pdfAPI.allRoomsLabelsPDF(examId, activeShift.id, variant), `seat_labels_${variant}_${shiftName}.zip`)
+      : download(() => pdfAPI.allRoomsLabelsMergedPDF(examId, activeShift.id, variant), `all_labels_${variant}_${shiftName}.pdf`)
 
   const downloadRoomLabels = (roomId, roomName, variant) =>
-    download(() => pdfAPI.roomLabelsPDF(examId, activeShift._id, roomId, variant), `${roomName.replace(/\s+/g, '_')}_labels_${variant}.pdf`)
+    download(() => pdfAPI.roomLabelsPDF(examId, activeShift.id, roomId, variant), `${roomName.replace(/\s+/g, '_')}_labels_${variant}.pdf`)
 
   const downloadFacultyDuty = () =>
     download(() => pdfAPI.facultyDutyPDF(examId), 'faculty_duty.pdf')
@@ -140,8 +140,8 @@ function PDFDrawer({ open, onClose, activeShift, examId, previewData, dlLoading,
             <div className="space-y-1">
               {previewData?.map(rd => (
                 <button
-                  key={rd.room?._id}
-                  onClick={() => downloadRoom(rd.room._id, rd.room.name)}
+                  key={rd.room?.id}
+                  onClick={() => downloadRoom(rd.room.id, rd.room.name)}
                   disabled={dlLoading}
                   className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 hover:border-gray-300 transition-colors text-left disabled:opacity-50"
                 >
@@ -204,14 +204,14 @@ function PDFDrawer({ open, onClose, activeShift, examId, previewData, dlLoading,
             {/* Per-room label dropdowns */}
             <div className="space-y-1">
               {previewData?.map(rd => (
-                <div key={rd.room?._id} className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-200 bg-white">
+                <div key={rd.room?.id} className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-200 bg-white">
                   <Tag size={12} className="text-gray-400 shrink-0" />
                   <span className="text-xs font-medium text-gray-700 flex-1">{rd.room?.name}</span>
                   <LabelDropdown
                     label="Download"
                     loading={dlLoading}
-                    onDetailed={() => downloadRoomLabels(rd.room._id, rd.room.name, 'detailed')}
-                    onSimple={() => downloadRoomLabels(rd.room._id, rd.room.name, 'simple')}
+                    onDetailed={() => downloadRoomLabels(rd.room.id, rd.room.name, 'detailed')}
+                    onSimple={() => downloadRoomLabels(rd.room.id, rd.room.name, 'simple')}
                   />
                 </div>
               ))}
@@ -245,17 +245,17 @@ export default function SeatingPlan() {
   const { data: shifts, loading: shLoading, refetch: refetchShifts } = useFetch(
     () => shiftsAPI.list(examId), [examId]
   )
-  const activeShift = (shifts || []).find(s => s._id === activeShiftId) || shifts?.[0]
+  const activeShift = (shifts || []).find(s => s.id === activeShiftId) || shifts?.[0]
 
   const { data: previewData, loading: previewLoading, refetch: refetchPreview } = useFetch(
-    () => activeShift ? seatingAPI.preview(examId, activeShift._id) : Promise.resolve({ data: { data: [] } }),
-    [activeShift?._id]
+    () => activeShift ? seatingAPI.preview(examId, activeShift.id) : Promise.resolve({ data: { data: [] } }),
+    [activeShift?.id]
   )
 
   const handleGenerate = async () => {
     setGenerateResult(null)
     try {
-      const res = await mutate(() => seatingAPI.generate(examId, activeShift._id), { successMsg: 'Seating plan generated!' })
+      const res = await mutate(() => seatingAPI.generate(examId, activeShift.id), { successMsg: 'Seating plan generated!' })
       setGenerateResult(res.data)
       refetchShifts()
       refetchPreview()
@@ -263,19 +263,19 @@ export default function SeatingPlan() {
   }
 
   const handlePublish = () =>
-    mutate(() => seatingAPI.publish(examId, activeShift._id), {
+    mutate(() => seatingAPI.publish(examId, activeShift.id), {
       successMsg: 'Seating plan published!',
       onSuccess: () => { setConfirmPublish(false); refetchShifts() },
     })
 
   const handleUnpublish = () =>
-    mutate(() => seatingAPI.unpublish(examId, activeShift._id), {
+    mutate(() => seatingAPI.unpublish(examId, activeShift.id), {
       successMsg: 'Seating plan unpublished',
       onSuccess: () => { setConfirmUnpublish(false); refetchShifts() },
     })
 
   const handleReset = () =>
-    mutate(() => seatingAPI.reset(examId, activeShift._id), {
+    mutate(() => seatingAPI.reset(examId, activeShift.id), {
       successMsg: 'Seating plan reset',
       onSuccess: () => { setConfirmReset(false); setGenerateResult(null); refetchShifts(); refetchPreview() },
     })
@@ -311,10 +311,10 @@ export default function SeatingPlan() {
           <span className="text-xs text-gray-500 font-medium mr-2">Shift:</span>
           {shifts.map(s => (
             <button
-              key={s._id}
-              onClick={() => { setActiveShiftId(s._id); setGenerateResult(null) }}
+              key={s.id}
+              onClick={() => { setActiveShiftId(s.id); setGenerateResult(null) }}
               className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors flex items-center gap-2
-                ${activeShift?._id === s._id ? 'bg-navy text-white border-navy' : 'bg-white text-gray-600 border-gray-200 hover:border-navy'}`}
+                ${activeShift?.id === s.id ? 'bg-navy text-white border-navy' : 'bg-white text-gray-600 border-gray-200 hover:border-navy'}`}
             >
               {s.name}
               {s.isPublished && <span className="w-1.5 h-1.5 rounded-full bg-green-400" />}
@@ -403,7 +403,7 @@ export default function SeatingPlan() {
               <SeatingPreview
                 data={previewData || []}
                 examId={examId}
-                shiftId={activeShift._id}
+                shiftId={activeShift.id}
                 onRefresh={refetchPreview}
               />
             )}
