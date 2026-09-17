@@ -249,10 +249,11 @@ const generateFacultyDutyHTML = (exam, allShifts, allAssignments) => {
 
   const facultyMap = {};
   allAssignments.forEach((a) => {
-    const fId = String(a.faculty?._id);
+    // Prisma returns .id not ._id; a.shiftId is the FK field, not a.shift
+    const fId = String(a.faculty?.id || a.facultyId);
     if (!facultyMap[fId]) facultyMap[fId] = { faculty: a.faculty, duties: [] };
     facultyMap[fId].duties.push({
-      shift: allShifts.find((s) => String(s._id) === String(a.shift)),
+      shift: allShifts.find((s) => String(s.id) === String(a.shiftId)),
       room: a.room,
     });
   });
