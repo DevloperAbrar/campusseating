@@ -1,242 +1,267 @@
 const puppeteer = require("puppeteer");
 
+const esc = (v) =>
+  String(v ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+
+const natCompare = (a, b) =>
+  String(a).localeCompare(String(b), undefined, { numeric: true });
+
 const generateRoomChartHTML = (exam, shift, room, assignments, invigilators, collegeName = "College", orientation = "auto") => {
+  // ── 1. Seat map: full room layout + who sits where ───────────────────────
+  const assignBySeat = new Map();
+  assignments.forEach((a) => assignBySeat.set(a.seatId, a));
 
-  // ── Build data structures ────────────────────────────────────────────────
-  const byBench = {};
-  assignments.forEach((a) => {
-    const key = `${a.row}-${a.bench}`;
-    if (!byBench[key]) byBench[key] = {};
-    byBench[key][a.position] = a;
+  const seatMap = new Map(); // seatId -> { seatId, row, bench, status }
+  (Array.isArray(room.seats) ? room.seats : []).forEach((s) => {
+    seatMap.set(s.seatId, {
+      seatId: s.seatId,
+      row: String(s.row),
+      bench: Number(s.bench),
+      status: s.status || "available",
+    });
   });
+  // Assigned seats missing from the room layout (room edited later) are still printed
+  assignments.forEach((a) => {
+    if (!seatMap.has(a.seatId)) {
+      seatMap.set(a.seatId, { seatId: a.seatId, row: String(a.row), bench: Number(a.bench), status: "available" });
+    }
+  });
+  const seatList = [...seatMap.values()];
 
-  const rows      = [...new Set(assignments.map((a) => a.row))].sort();
-  const benchNums = [...new Set(assignments.map((a) => a.bench))].sort((a, b) => a - b);
+  const rows    = [...new Set(seatList.map((s) => s.row))].sort(natCompare);
+  const benches = [...new Set(seatList.map((s) => s.bench))].sort((a, b) => a - b);
 
-  // ── Auto-detect orientation ──────────────────────────────────────────────
-  // More benches (columns) than rows → landscape; otherwise portrait
-  const isLandscape =
-    orientation === "landscape" ||
-    (orientation === "auto" && benchNums.length > rows.length);
+  const grid = {}; // "row|bench" -> seats[] (ordered left to right)
+  seatList.forEach((s) => {
+    const k = `${s.row}|${s.bench}`;
+    if (!grid[k]) grid[k] = [];
+    grid[k].push(s);
+  });
+  Object.values(grid).forEach((arr) => arr.sort((a, b) => natCompare(a.seatId, b.seatId)));
+  const slots = Math.max(1, ...Object.values(grid).map((arr) => arr.length)); // seats per bench
 
-  // ── Collect all unique positions in bench (L, M, R etc.) ────────────────
-  const allPositions = [...new Set(assignments.map((a) => a.position))].sort();
+  // ── 2. Layout: pick orientation and split benches so every page fits ─────
+  const ROW_COL_MM  = 9;   // "Row" label column
+  const MIN_SEAT_MM = 25;  // narrowest readable seat card
+  const MAX_SEAT_MM = 40;  // stop cards from getting silly-wide on small rooms
+  const maxColsFor  = (widthMm) => Math.max(1, Math.floor((widthMm - ROW_COL_MM) / MIN_SEAT_MM));
 
-  // ── Build table rows ─────────────────────────────────────────────────────
-  const tableRows = rows.map((row) => {
-    const benchCells = benchNums.map((b) => {
-      const benchData = byBench[`${row}-${b}`] || {};
+  const totalCols = benches.length * slots;
+  const mode =
+    orientation === "portrait" || orientation === "landscape"
+      ? orientation
+      : totalCols <= maxColsFor(190) ? "portrait" : "landscape";
+  const isLandscape = mode === "landscape";
+  const pageW = isLandscape ? 277 : 190; // A4 minus 10mm margins
 
-      // Render seats side-by-side inside the cell
-      const seatDivs = allPositions.map((pos) => {
-        const a = benchData[pos];
-        if (!a) {
-          // Empty position slot — show placeholder so layout stays consistent
-          return `<div class="seat seat-empty">
-            <span class="seat-id">${row}-${b}-${pos}</span>
-            <span class="student-name empty-text">—</span>
-          </div>`;
-        }
-        return `<div class="seat">
-          <span class="seat-id">${row}-${b}-${pos}</span>
-          <span class="student-name">${a.student?.name || "—"}</span>
-          <span class="branch-code">${a.student?.branch?.code || ""}</span>
-        </div>`;
-      }).join("");
+  const benchesPerPage = Math.max(1, Math.floor(maxColsFor(pageW) / slots));
+  const pageCount      = Math.max(1, Math.ceil(benches.length / benchesPerPage));
+  const chunkSize      = Math.max(1, Math.ceil(benches.length / pageCount)); // widest page
+  // Spread benches evenly across pages (e.g. 10 benches / 4 pages -> 3,3,2,2)
+  const baseSize = Math.floor(benches.length / pageCount);
+  const extra    = benches.length % pageCount;
+  const chunks = [];
+  let cursor = 0;
+  for (let i = 0; i < pageCount && cursor < benches.length; i++) {
+    const size = baseSize + (i < extra ? 1 : 0);
+    chunks.push(benches.slice(cursor, cursor + size));
+    cursor += size;
+  }
+  if (!chunks.length) chunks.push([]);
 
-      return `<td class="bench-cell"><div class="bench-inner">${seatDivs}</div></td>`;
-    }).join("");
+  const seatMm   = Math.min(MAX_SEAT_MM, (pageW - ROW_COL_MM) / (chunkSize * slots));
+  const nameFont = seatMm >= 32 ? 9 : seatMm >= 27 ? 8.5 : 8;   // pt
+  const smallFont = seatMm >= 30 ? 7 : 6.5;                       // pt
 
-    return `<tr><td class="row-label">${row}</td>${benchCells}</tr>`;
-  }).join("");
+  // ── 3. Summary numbers ───────────────────────────────────────────────────
+  const capacity = seatList.filter((s) => s.status === "available").length;
+  const branchCounts = {};
+  assignments.forEach((a) => {
+    const c = a.student?.branch?.code || "—";
+    branchCounts[c] = (branchCounts[c] || 0) + 1;
+  });
+  const branchSummary =
+    Object.entries(branchCounts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([c, n]) => `${esc(c)}: ${n}`)
+      .join("&nbsp;&nbsp;·&nbsp;&nbsp;") || "—";
+  const invigilatorNames = invigilators.map((i) => esc(i.faculty?.name)).filter(Boolean).join(", ") || "—";
+  const generatedOn = new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 
-  // ── Compute column width based on positions per bench ───────────────────
-  const posCount   = allPositions.length || 1;
-  // Each seat card ~90px wide, plus gap; row label is 36px
-  const seatWidth  = isLandscape ? 85 : 90;
-  const cellWidth  = posCount * seatWidth + (posCount - 1) * 4 + 12; // padding
-  const tableWidth = 36 + benchNums.length * (cellWidth + 2);
+  // ── 4. Builders ──────────────────────────────────────────────────────────
+  const seatCell = (seat, isFirstInBench) => {
+    const start = isFirstInBench ? " bench-start" : "";
+    if (!seat) return `<td class="seat seat-none${start}"></td>`;
+
+    const a = assignBySeat.get(seat.seatId);
+    if (a) {
+      return `<td class="seat${start}">
+        <div class="top"><span class="sid">${esc(seat.seatId)}</span><span class="br">${esc(a.student?.branch?.code || "")}</span></div>
+        <div class="nm">${esc(a.student?.name || "—")}</div>
+        <div class="en">${esc(a.student?.enrollmentNo || "")}</div>
+      </td>`;
+    }
+    const isAvailable = seat.status === "available";
+    const label = isAvailable ? "Vacant" : seat.status === "reserved" ? "Reserved" : "Not in use";
+    const cls = isAvailable ? "seat-vacant" : "seat-off";
+    return `<td class="seat ${cls}${start}">
+      <div class="top"><span class="sid">${esc(seat.seatId)}</span></div>
+      <div class="state">${label}</div>
+    </td>`;
+  };
+
+  const buildTable = (chunk) => {
+    const tableW = ROW_COL_MM + seatMm * chunk.length * slots;
+    const colgroup =
+      `<colgroup><col style="width:${ROW_COL_MM}mm">` +
+      chunk.map(() => Array.from({ length: slots }, () => `<col style="width:${seatMm}mm">`).join("")).join("") +
+      `</colgroup>`;
+    const head =
+      `<tr><th class="row-h">Row</th>` +
+      chunk.map((b) => `<th class="bench-h bench-start" colspan="${slots}">Bench ${b}</th>`).join("") +
+      `</tr>`;
+    const body = rows
+      .map((r) => {
+        const cells = chunk
+          .map((b) => {
+            const arr = grid[`${r}|${b}`] || [];
+            return Array.from({ length: slots }, (_, i) => seatCell(arr[i], i === 0)).join("");
+          })
+          .join("");
+        return `<tr><td class="row-label">${esc(r)}</td>${cells}</tr>`;
+      })
+      .join("");
+    return `<table style="width:${tableW}mm">${colgroup}<thead>${head}</thead><tbody>${body}</tbody></table>`;
+  };
+
+  const sections = chunks
+    .map((chunk, idx) => {
+      const partLabel =
+        chunks.length > 1
+          ? `<div class="part">Benches ${chunk[0]}–${chunk[chunk.length - 1]} &nbsp;•&nbsp; Page ${idx + 1} of ${chunks.length}</div>`
+          : "";
+      const content = chunk.length
+        ? buildTable(chunk)
+        : `<div class="empty">No seating data available for this room.</div>`;
+      return `<section class="sheet">
+  <div class="hdr">
+    <div>
+      <div class="college">${esc(collegeName)}</div>
+      <div class="sub">CampusSeating — Room Seating Chart</div>
+    </div>
+    <div class="gen">Generated: ${generatedOn}</div>
+  </div>
+  <div class="meta">
+    <div><b>Exam:</b>${esc(exam.title)}</div>
+    <div><b>Academic Year:</b>${esc(exam.academicYear)}</div>
+    <div><b>Shift:</b>${esc(shift.name)} | ${esc(shift.startTime)} – ${esc(shift.endTime)}</div>
+    <div><b>Room:</b>${esc(room.name)}${room.building ? ` | ${esc(room.building)}` : ""}${room.floor ? `, ${esc(room.floor)}` : ""}</div>
+    <div><b>Students:</b>${assignments.length}</div>
+    <div><b>Room Capacity:</b>${capacity}</div>
+    <div class="wide"><b>Invigilators:</b>${invigilatorNames}</div>
+    <div class="wide"><b>Branch-wise:</b>${branchSummary}</div>
+  </div>
+  ${partLabel}
+  ${content}
+  <div class="foot">Generated by CampusSeating &bull; ${esc(collegeName)}</div>
+</section>`;
+    })
+    .join("\n");
 
   return `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
+<meta name="pdf-orientation" content="${mode}">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  @page { size: A4 ${mode}; margin: 10mm; }
 
-  @page {
-    size: A4 ${isLandscape ? "landscape" : "portrait"};
-    margin: 10mm;
-  }
-
+  html, body { width: ${pageW}mm; }
   body {
-    font-family: 'Arial', sans-serif;
-    font-size: ${isLandscape ? "10px" : "11px"};
+    font-family: Arial, Helvetica, sans-serif;
     color: #1a1a1a;
-    padding: 0;
-    width: ${isLandscape ? "277mm" : "190mm"};
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
+
+  /* One sheet per group of benches; each sheet repeats the header */
+  .sheet { width: ${pageW}mm; page-break-after: always; break-after: page; }
+  .sheet:last-child { page-break-after: auto; break-after: auto; }
 
   /* ── Header ── */
-  .header {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    border-bottom: 2px solid #1e3a5f;
-    padding-bottom: 10px;
-    margin-bottom: 12px;
+  .hdr {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    border-bottom: 0.6mm solid #1e3a5f; padding-bottom: 2mm; margin-bottom: 3mm;
   }
-  .college-name  { font-size: ${isLandscape ? "14px" : "16px"}; font-weight: 700; color: #1e3a5f; }
-  .product-name  { font-size: 11px; color: #666; margin-top: 2px; }
-  .generated-on  { font-size: 9px; color: #888; text-align: right; margin-top: 2px; }
+  .college { font-size: 15pt; font-weight: 700; color: #1e3a5f; }
+  .sub     { font-size: 9pt; color: #64748b; margin-top: 0.5mm; }
+  .gen     { font-size: 8pt; color: #94a3b8; }
 
-  /* ── Meta block ── */
+  /* ── Meta ── */
   .meta {
-    margin-bottom: 12px;
-    border: 1px solid #e0e0e0;
-    border-radius: 6px;
-    padding: 10px 12px;
-    background: #f8fafc;
+    display: flex; flex-wrap: wrap;
+    border: 0.3mm solid #e2e8f0; border-radius: 1.5mm; background: #f8fafc;
+    padding: 2.2mm 3mm; margin-bottom: 3mm; font-size: 8.5pt;
   }
-  .meta-grid   { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 16px; }
-  .meta-item   { display: flex; gap: 6px; font-size: 10px; }
-  .meta-label  { font-weight: 600; color: #555; min-width: 86px; }
+  .meta > div { width: 33.33%; padding: 0.6mm 3mm 0.6mm 0; }
+  .meta > div.wide { width: 100%; }
+  .meta b { color: #475569; margin-right: 1.5mm; font-weight: 700; }
+
+  .part { font-size: 9.5pt; font-weight: 700; color: #1e3a5f; margin-bottom: 1.5mm; }
+  .empty { padding: 20mm 0; text-align: center; color: #94a3b8; font-size: 11pt; }
 
   /* ── Table ── */
-  .table-wrap { overflow: visible; }
-  table {
-    border-collapse: collapse;
-    width: max-content;
-    min-width: 100%;
-    table-layout: fixed;
-  }
-
-  th, td {
-    border: 1px solid #d0d5dd;
-    text-align: left;
-    vertical-align: top;
-  }
+  table { border-collapse: collapse; table-layout: fixed; }
+  thead { display: table-header-group; }
+  tr { page-break-inside: avoid; break-inside: avoid; }
+  th, td { border: 0.3mm solid #cbd5e1; }
   th {
-    background: #1e3a5f;
-    color: white;
-    font-size: 9px;
-    padding: 5px 6px;
-    white-space: nowrap;
+    background: #1e3a5f; color: #fff; font-size: 8pt; font-weight: 700;
+    text-align: center; padding: 1.3mm 1mm;
   }
+  .bench-start { border-left: 0.7mm solid #1e3a5f; }
   .row-label {
-    font-weight: 700;
-    background: #f1f5f9;
-    width: 36px;
-    min-width: 36px;
-    text-align: center;
-    font-size: 12px;
-    color: #1e3a5f;
-    vertical-align: middle;
-    padding: 4px;
+    background: #eef2f7; color: #1e3a5f; font-weight: 700; font-size: 10pt;
+    text-align: center; vertical-align: middle;
   }
 
-  /* ── Bench cell ── */
-  .bench-cell {
-    padding: 4px 5px;
-    width: ${cellWidth}px;
-    min-width: ${cellWidth}px;
+  /* ── Seat card ── */
+  td.seat { height: 15mm; padding: 1mm 1.3mm; vertical-align: top; overflow: hidden; }
+  .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5mm; }
+  .sid { font-size: ${smallFont}pt; color: #64748b; }
+  .br  {
+    font-size: ${smallFont}pt; font-weight: 700; color: #1e6bb8;
+    background: #e8f4fd; padding: 0 1mm; border-radius: 0.8mm;
   }
-  .bench-inner {
-    display: flex;
-    flex-direction: row;
-    gap: 4px;
-    align-items: flex-start;
+  .nm {
+    font-size: ${nameFont}pt; font-weight: 700; line-height: 1.15; word-break: break-word;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
   }
-
-  /* ── Individual seat card ── */
-  .seat {
-    flex: 1;
-    min-width: 0;
-    padding: 3px 4px;
-    border-radius: 3px;
-    background: #fff;
-    border: 1px solid #e2e8f0;
+  .en {
+    font-size: ${smallFont}pt; color: #475569; margin-top: 0.4mm;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
-  .seat-empty {
-    background: #fafafa;
-    border-color: #eee;
+  .seat-vacant { background: #f8fafc; }
+  .seat-none   { background: #f1f5f9; }
+  .seat-off {
+    background: repeating-linear-gradient(45deg, #f1f5f9, #f1f5f9 1.5mm, #e2e8f0 1.5mm, #e2e8f0 3mm);
   }
-  .seat-id {
-    display: block;
-    font-size: 8px;
-    color: #94a3b8;
-    line-height: 1.2;
-    margin-bottom: 2px;
-  }
-  .student-name {
-    display: block;
-    font-weight: 600;
-    font-size: ${isLandscape ? "9px" : "10px"};
-    line-height: 1.3;
-    color: #1a1a1a;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .empty-text { color: #ccc; font-weight: 400; }
-  .branch-code {
-    display: inline-block;
-    font-size: 8px;
-    background: #e8f4fd;
-    color: #1e6bb8;
-    padding: 1px 4px;
-    border-radius: 3px;
-    margin-top: 2px;
-    font-weight: 600;
-  }
+  .state { font-size: ${smallFont + 0.5}pt; color: #94a3b8; font-style: italic; margin-top: 2.5mm; }
 
   /* ── Footer ── */
-  .footer {
-    margin-top: 12px;
-    border-top: 1px solid #eee;
-    padding-top: 6px;
-    text-align: center;
-    color: #aaa;
-    font-size: 9px;
+  .foot {
+    margin-top: 3mm; border-top: 0.3mm solid #e2e8f0; padding-top: 1.5mm;
+    text-align: center; color: #94a3b8; font-size: 8pt;
   }
 </style>
 </head>
 <body>
-
-<div class="header">
-  <div>
-    <div class="college-name">${collegeName}</div>
-    <div class="product-name">CampusSeating — Room Chart</div>
-  </div>
-  <div>
-    <div class="generated-on">Generated: ${new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}</div>
-  </div>
-</div>
-
-<div class="meta">
-  <div class="meta-grid">
-    <div class="meta-item"><span class="meta-label">Exam:</span><span>${exam.title}</span></div>
-    <div class="meta-item"><span class="meta-label">Academic Year:</span><span>${exam.academicYear}</span></div>
-    <div class="meta-item"><span class="meta-label">Shift:</span><span>${shift.name} | ${shift.startTime} – ${shift.endTime}</span></div>
-    <div class="meta-item"><span class="meta-label">Room:</span><span>${room.name}${room.building ? ` | ${room.building}` : ""}${room.floor ? `, ${room.floor}` : ""}</span></div>
-    <div class="meta-item"><span class="meta-label">Students:</span><span>${assignments.length}</span></div>
-    <div class="meta-item"><span class="meta-label">Invigilators:</span><span>${invigilators.map((i) => i.faculty?.name).join(", ") || "—"}</span></div>
-  </div>
-</div>
-
-<div class="table-wrap">
-  <table>
-    <thead>
-      <tr>
-        <th style="width:36px;">Row</th>
-        ${benchNums.map((b) => `<th style="width:${cellWidth}px;">Bench ${b}</th>`).join("")}
-      </tr>
-    </thead>
-    <tbody>${tableRows}</tbody>
-  </table>
-</div>
-
-<div class="footer">Generated by CampusSeating &bull; ${collegeName}</div>
+${sections}
 </body>
 </html>`;
 };
@@ -426,12 +451,17 @@ const launchBrowser = async () => {
 // Renders one HTML string to PDF using an already-open browser.
 // Opens/closes only a PAGE (cheap), not a browser (expensive).
 const renderPDFOnBrowser = async (browser, html, landscape = false) => {
+  // Room charts pick their own orientation and declare it in the HTML.
+  // Puppeteer ignores the CSS @page size, so it has to be passed explicitly.
+  const isLandscape =
+    landscape || html.includes('<meta name="pdf-orientation" content="landscape">');
+
   const page = await browser.newPage();
   try {
     await page.setContent(html, { waitUntil: "networkidle0" });
     const pdf = await page.pdf({
       format: "A4",
-      landscape,
+      landscape: isLandscape,
       printBackground: true,
       margin: { top: "10mm", bottom: "10mm", left: "10mm", right: "10mm" },
     });
