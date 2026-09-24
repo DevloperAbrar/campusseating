@@ -90,7 +90,7 @@ export default function Login() {
 
             <h1 className="text-2xl font-bold text-gray-900 mb-1">Welcome back</h1>
             <p className="text-sm text-gray-500 mb-6">
-              Sign in to your {import.meta.env.VITE_COLLEGE_NAME || 'Admin'} account
+              Sign in to your admin account
             </p>
 
             {/* secure badge */}
