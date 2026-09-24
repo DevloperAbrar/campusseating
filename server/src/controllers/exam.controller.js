@@ -123,21 +123,20 @@ const resolveStudents = asyncHandler(async (req, res) => {
   const shiftRooms = await prisma.shiftRoom.findMany({ where: { shiftId: shift.id } });
   const totalSeats = shiftRooms.reduce((sum, r) => sum + (r.usableCapacity || 0), 0);
 
-  if (students.length > totalSeats) {
-    return res.json(new ApiResponse(200, "Warning: More students than seats", {
-      studentIds: students.map((s) => s.id),
-      totalStudents: students.length,
-      totalAvailableSeats: totalSeats,
-      warning: `${students.length - totalSeats} students cannot be seated`,
-    }));
-  }
-
+  // ✅ ALWAYS save studentIds — warning is informational only, not a blocker
   await prisma.shift.update({
     where: { id: shift.id },
     data: { studentIds: students.map((s) => s.id), totalStudents: students.length, totalAvailableSeats: totalSeats },
   });
 
-  res.json(new ApiResponse(200, "Students resolved", { totalStudents: students.length, totalAvailableSeats: totalSeats }));
+  const responseData = { totalStudents: students.length, totalAvailableSeats: totalSeats };
+
+  if (students.length > totalSeats) {
+    responseData.warning = `${students.length - totalSeats} students cannot be seated — not enough room capacity`;
+    return res.json(new ApiResponse(200, "Warning: More students than seats", responseData));
+  }
+
+  res.json(new ApiResponse(200, "Students resolved", responseData));
 });
 
 // ─── INVIGILATORS ────────────────────────────────────────────────────────────
