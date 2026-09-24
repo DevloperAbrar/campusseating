@@ -42,7 +42,7 @@ const getRoomPDF = asyncHandler(async (req, res) => {
   if (!exam || !shift || !room) throw new ApiError(404, "Not found");
 
   const { assignments, invigilators } = await fetchRoomData(shiftId, roomId);
-  const html = generateRoomChartHTML(exam, shift, room, assignments, invigilators);
+  const html = generateRoomChartHTML(exam, shift, room, assignments, invigilators, req.college.name);
   const pdf = await htmlToPDF(html);
 
   res.setHeader("Content-Type", "application/pdf");
@@ -71,7 +71,7 @@ const getAllRoomsPDF = asyncHandler(async (req, res) => {
   try {
     for (const room of rooms) {
       const { assignments, invigilators } = await fetchRoomData(shiftId, room.id);
-      const html = generateRoomChartHTML(exam, shift, room, assignments, invigilators);
+      const html = generateRoomChartHTML(exam, shift, room, assignments, invigilators, req.college.name);
       const pdf = await renderPDFOnBrowser(browser, html);
       archive.append(Buffer.from(pdf), { name: `${room.name.replace(/\s+/g, "_")}_chart.pdf` });
     }
@@ -97,7 +97,7 @@ const getAllRoomsMergedPDF = asyncHandler(async (req, res) => {
   try {
     for (const room of rooms) {
       const { assignments, invigilators } = await fetchRoomData(shiftId, room.id);
-      const html = generateRoomChartHTML(exam, shift, room, assignments, invigilators);
+      const html = generateRoomChartHTML(exam, shift, room, assignments, invigilators, req.college.name);
       pdfBuffers.push(await renderPDFOnBrowser(browser, html));
     }
   } finally {
@@ -121,8 +121,8 @@ const getSeatLabelsPDF = asyncHandler(async (req, res) => {
   if (!exam || !shift || !room) throw new ApiError(404, "Not found");
 
   const { assignments } = await fetchRoomData(shiftId, roomId);
-  // generateSeatLabelsHTML expects ({ room, assignments }[], variant) — pass as single-room array
-  const html = generateSeatLabelsHTML([{ room, assignments }], variant);
+  // generateSeatLabelsHTML expects ({ room, assignments }[], variant, collegeName) — pass as single-room array
+  const html = generateSeatLabelsHTML([{ room, assignments }], variant, req.college.name);
   const pdf = await htmlToPDF(html);
 
   res.setHeader("Content-Type", "application/pdf");
@@ -153,7 +153,7 @@ const getAllSeatLabelsPDF = asyncHandler(async (req, res) => {
   try {
     for (const room of rooms) {
       const { assignments } = await fetchRoomData(shiftId, room.id);
-      const html = generateSeatLabelsHTML([{ room, assignments }], variant);
+      const html = generateSeatLabelsHTML([{ room, assignments }], variant, req.college.name);
       const pdf = await renderPDFOnBrowser(browser, html);
       archive.append(Buffer.from(pdf), { name: `${room.name.replace(/\s+/g, "_")}_labels_${variant}.pdf` });
     }
@@ -181,7 +181,7 @@ const getAllSeatLabelsMergedPDF = asyncHandler(async (req, res) => {
   try {
     for (const room of rooms) {
       const { assignments } = await fetchRoomData(shiftId, room.id);
-      const html = generateSeatLabelsHTML([{ room, assignments }], variant);
+      const html = generateSeatLabelsHTML([{ room, assignments }], variant, req.college.name);
       pdfBuffers.push(await renderPDFOnBrowser(browser, html));
     }
   } finally {
@@ -210,7 +210,7 @@ const getFacultyDutyPDF = asyncHandler(async (req, res) => {
     }),
   ]);
 
-  const html = generateFacultyDutyHTML(exam, shifts, assignments);
+  const html = generateFacultyDutyHTML(exam, shifts, assignments, req.college.name);
   const pdf = await htmlToPDF(html);
 
   res.setHeader("Content-Type", "application/pdf");

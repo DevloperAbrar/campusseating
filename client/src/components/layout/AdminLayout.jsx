@@ -57,7 +57,7 @@ export default function AdminLayout() {
         style={{ maxHeight: '48px', maxWidth: '200px', width: '100%' }}
       />
       <p className="text-xs text-gray-400 truncate w-full text-center leading-tight">
-        {import.meta.env.VITE_COLLEGE_NAME || 'CampusSafar College'}
+        {admin?.collegeName || ''}
       </p>
     </>
   ) : (

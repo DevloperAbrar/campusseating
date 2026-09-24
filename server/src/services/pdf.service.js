@@ -1,7 +1,6 @@
 const puppeteer = require("puppeteer");
 
-const generateRoomChartHTML = (exam, shift, room, assignments, invigilators, orientation = "auto") => {
-  const collegeName = process.env.COLLEGE_NAME || "College";
+const generateRoomChartHTML = (exam, shift, room, assignments, invigilators, collegeName = "College", orientation = "auto") => {
 
   // ── Build data structures ────────────────────────────────────────────────
   const byBench = {};
@@ -244,8 +243,7 @@ const generateRoomChartHTML = (exam, shift, room, assignments, invigilators, ori
 
 // ── Faculty Duty Chart (unchanged) ──────────────────────────────────────────
 
-const generateFacultyDutyHTML = (exam, allShifts, allAssignments) => {
-  const collegeName = process.env.COLLEGE_NAME || "College";
+const generateFacultyDutyHTML = (exam, allShifts, allAssignments, collegeName = "College") => {
 
   const facultyMap = {};
   allAssignments.forEach((a) => {
@@ -306,8 +304,7 @@ ${facultyRows}
 // Packed in a tight grid — 4 columns × as many rows as needed, minimal whitespace.
 
 
-const generateSeatLabelsHTML = (roomsData, variant = 'detailed') => {
-  const collegeName = process.env.COLLEGE_NAME || 'College';
+const generateSeatLabelsHTML = (roomsData, variant = 'detailed', collegeName = 'College') => {
   const isDetailed = variant === 'detailed';
   const cols = isDetailed ? 8 : 10;
   const seatNumSize = isDetailed ? '10px' : '13px';

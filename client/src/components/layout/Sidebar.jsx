@@ -50,7 +50,7 @@ export default function Sidebar({ collapsed }) {
               CampusSeating
             </p>
             <p className="text-xs text-gray-400 truncate leading-tight">
-              {import.meta.env.VITE_COLLEGE_NAME || 'Admin Portal'}
+              {admin?.collegeName || 'Admin Portal'}
             </p>
           </div>
         )}
