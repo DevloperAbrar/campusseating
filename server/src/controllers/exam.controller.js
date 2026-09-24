@@ -93,12 +93,36 @@ const updateShift = asyncHandler(async (req, res) => {
   if (!shift) throw new ApiError(404, "Shift not found");
   if (shift.isPublished) throw new ApiError(403, "Shift is published — unpublish first");
 
-  const { name, startTime, endTime, selectedBranchIds, selectedYears, seatingRules } = req.body;
+  const { name, startTime, endTime, selectedBranchIds, selectedYears, seatingRules, rooms } = req.body;
+
+  // Update shift fields
   const updated = await prisma.shift.update({
     where: { id: req.params.shiftId },
     data: { name, startTime, endTime, selectedBranchIds, selectedYears, seatingRules },
   });
-  res.json(new ApiResponse(200, "Shift updated", updated));
+
+  // ✅ If rooms were sent, replace all shiftRooms
+  if (rooms && Array.isArray(rooms)) {
+    await prisma.shiftRoom.deleteMany({ where: { shiftId: shift.id } });
+    if (rooms.length > 0) {
+      await prisma.shiftRoom.createMany({
+        data: rooms.map((r) => ({
+          shiftId: shift.id,
+          roomId: r.room,
+          priority: r.priority || 0,
+          usableCapacity: r.usableCapacity || 0,
+        })),
+      });
+    }
+  }
+
+  // Return updated shift with rooms included
+  const result = await prisma.shift.findFirst({
+    where: { id: shift.id },
+    include: { shiftRooms: { include: { room: { select: { name: true, building: true, usableCapacity: true } } } } },
+  });
+
+  res.json(new ApiResponse(200, "Shift updated", result));
 });
 
 const deleteShift = asyncHandler(async (req, res) => {
