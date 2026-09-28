@@ -3,6 +3,8 @@ import Input from '../ui/Input'
 import Button from '../ui/Button'
 
 export default function RoomForm({ defaultValues, onSubmit, loading, onCancel }) {
+  const isEdit = Boolean(defaultValues?.id)
+
   const { register, handleSubmit, formState: { errors } } = useForm({
     defaultValues: defaultValues || {
       defaultSeatsPerBench: 2,
@@ -54,8 +56,9 @@ export default function RoomForm({ defaultValues, onSubmit, loading, onCancel })
             type="number"
             required
             min={1}
+            max={50}
             error={errors.benchesPerRow?.message}
-            {...register('benchesPerRow', { required: 'Required', valueAsNumber: true, min: { value: 1, message: 'Min 1' } })}
+            {...register('benchesPerRow', { required: 'Required', valueAsNumber: true, min: { value: 1, message: 'Min 1' }, max: { value: 50, message: 'Max 50' } })}
           />
           <div className="form-group">
             <label className="label">
@@ -74,9 +77,9 @@ export default function RoomForm({ defaultValues, onSubmit, loading, onCancel })
         </div>
       </div>
 
-      {defaultValues?._id && (
+      {isEdit && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-700">
-          ⚠ Editing rows, benches, or seats per bench will regenerate all seat positions. Any custom seat statuses will be reset.
+          Changing rows, benches, or seats per bench will regenerate all seat positions and reset any custom seat statuses (blocked / reserved).
         </div>
       )}
 
@@ -85,7 +88,7 @@ export default function RoomForm({ defaultValues, onSubmit, loading, onCancel })
           Cancel
         </Button>
         <Button type="submit" loading={loading}>
-          {defaultValues?._id ? 'Update Room' : 'Create Room'}
+          {isEdit ? 'Update Room' : 'Create Room'}
         </Button>
       </div>
     </form>

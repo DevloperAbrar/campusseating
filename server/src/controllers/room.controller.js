@@ -4,11 +4,15 @@ const ApiResponse = require("../utils/ApiResponse");
 const { prisma } = require("../config/db");
 const { getPagination, buildPaginationMeta } = require("../utils/helpers");
 
+const MAX_ROWS = 26;
+const MAX_BENCHES_PER_ROW = 50;
+const MAX_SEATS_PER_BENCH = 4;
+
 /**
  * A room is "locked" only while it is actually in use:
  *  - it has seating assignments, or
  *  - it is attached to a shift (ShiftRoom).
- * This is computed live (not stored) so it can never go stale when an exam,
+ * Computed live (not stored) so it can never go stale when an exam,
  * shift or seating plan is deleted/reset. The legacy `Room.isLocked` column is ignored.
  */
 const getLockedRoomIds = async (roomIds) => {
@@ -42,6 +46,41 @@ const findRoomOrFail = async (id, collegeId) => {
   const room = await prisma.room.findFirst({ where: { id, collegeId, isActive: true } });
   if (!room) throw new ApiError(404, "Room not found");
   return room;
+};
+
+// Validates and normalises the layout numbers. Throws 400 on bad input.
+const parseLayout = ({ rows, benchesPerRow, defaultSeatsPerBench }) => {
+  const r = Number(rows);
+  const b = Number(benchesPerRow);
+  const p = Number(defaultSeatsPerBench);
+
+  if (![r, b, p].every((n) => Number.isInteger(n) && n > 0)) {
+    throw new ApiError(400, "rows, benchesPerRow and defaultSeatsPerBench must be positive whole numbers");
+  }
+  if (r > MAX_ROWS) throw new ApiError(400, `Number of rows cannot exceed ${MAX_ROWS}`);
+  if (b > MAX_BENCHES_PER_ROW) throw new ApiError(400, `Benches per row cannot exceed ${MAX_BENCHES_PER_ROW}`);
+  if (p > MAX_SEATS_PER_BENCH) throw new ApiError(400, `Seats per bench cannot exceed ${MAX_SEATS_PER_BENCH}`);
+
+  return { rows: r, benchesPerRow: b, defaultSeatsPerBench: p };
+};
+
+// Generates the seat array for a layout (same format as before)
+const generateSeats = ({ rows, benchesPerRow, defaultSeatsPerBench }) => {
+  const seats = [];
+  for (let r = 1; r <= rows; r++) {
+    for (let b = 1; b <= benchesPerRow; b++) {
+      for (let p = 1; p <= defaultSeatsPerBench; p++) {
+        seats.push({
+          seatId: `R${r}B${b}P${p}`,
+          row: `R${r}`,
+          bench: b,
+          position: p === 1 ? "L" : "R",
+          status: "available",
+        });
+      }
+    }
+  }
+  return seats;
 };
 
 const getRooms = asyncHandler(async (req, res) => {
@@ -78,46 +117,23 @@ const getRoomById = asyncHandler(async (req, res) => {
 
 const createRoom = asyncHandler(async (req, res) => {
   const { name, building, floor, rows, benchesPerRow, defaultSeatsPerBench } = req.body;
-  if (!name || !rows || !benchesPerRow || !defaultSeatsPerBench) {
+  if (!name || !String(name).trim() || !rows || !benchesPerRow || !defaultSeatsPerBench) {
     throw new ApiError(400, "name, rows, benchesPerRow, defaultSeatsPerBench required");
   }
 
-  const rowsN = Number(rows);
-  const benchesN = Number(benchesPerRow);
-  const perBenchN = Number(defaultSeatsPerBench);
-  if (![rowsN, benchesN, perBenchN].every((n) => Number.isInteger(n) && n > 0)) {
-    throw new ApiError(400, "rows, benchesPerRow and defaultSeatsPerBench must be positive whole numbers");
-  }
+  const layout = parseLayout({ rows, benchesPerRow, defaultSeatsPerBench });
+  const seats = generateSeats(layout);
 
-  // Generate seats array
-  const seats = [];
-  for (let r = 1; r <= rowsN; r++) {
-    for (let b = 1; b <= benchesN; b++) {
-      for (let p = 1; p <= perBenchN; p++) {
-        seats.push({
-          seatId: `R${r}B${b}P${p}`,
-          row: `R${r}`,
-          bench: b,
-          position: p === 1 ? "L" : "R",
-          status: "available",
-        });
-      }
-    }
-  }
-
-  const totalCapacity = seats.length;
   const room = await prisma.room.create({
     data: {
       collegeId: req.collegeId,
       name: String(name).trim(),
       building: building || "",
       floor: floor || "",
-      rows: rowsN,
-      benchesPerRow: benchesN,
-      defaultSeatsPerBench: perBenchN,
+      ...layout,
       seats,
-      totalCapacity,
-      usableCapacity: totalCapacity,
+      totalCapacity: seats.length,
+      usableCapacity: seats.length,
     },
   });
   res.status(201).json(new ApiResponse(201, "Room created", { ...room, isLocked: false }));
@@ -129,7 +145,7 @@ const updateRoom = asyncHandler(async (req, res) => {
     throw new ApiError(403, "Room is used in an exam and cannot be edited. Delete or reset the exam seating first.");
   }
 
-  const { name, building, floor } = req.body;
+  const { name, building, floor, rows, benchesPerRow, defaultSeatsPerBench } = req.body;
   const data = {};
 
   if (name !== undefined) {
@@ -140,7 +156,36 @@ const updateRoom = asyncHandler(async (req, res) => {
   if (building !== undefined) data.building = building;
   if (floor !== undefined) data.floor = floor;
 
-  if (Object.keys(data).length === 0) throw new ApiError(400, "Nothing to update");
+  // Layout: only regenerate seats when rows / benches / seats-per-bench actually changed,
+  // so editing just the name or floor never wipes custom blocked/reserved seats.
+  const layoutSent = [rows, benchesPerRow, defaultSeatsPerBench].some(
+    (v) => v !== undefined && v !== null && v !== ""
+  );
+  if (layoutSent) {
+    const layout = parseLayout({
+      rows: rows ?? room.rows,
+      benchesPerRow: benchesPerRow ?? room.benchesPerRow,
+      defaultSeatsPerBench: defaultSeatsPerBench ?? room.defaultSeatsPerBench,
+    });
+
+    const layoutChanged =
+      layout.rows !== room.rows ||
+      layout.benchesPerRow !== room.benchesPerRow ||
+      layout.defaultSeatsPerBench !== room.defaultSeatsPerBench;
+
+    if (layoutChanged) {
+      const seats = generateSeats(layout);
+      Object.assign(data, layout, {
+        seats,
+        totalCapacity: seats.length,
+        usableCapacity: seats.length,
+      });
+    }
+  }
+
+  if (Object.keys(data).length === 0) {
+    return res.json(new ApiResponse(200, "No changes", { ...room, isLocked: false }));
+  }
 
   // Duplicate name (P2002) is turned into a 409 by the error middleware
   const updated = await prisma.room.update({ where: { id: room.id }, data });
