@@ -34,7 +34,9 @@ export default function SeatGrid({ seats = [], onSeatClick, readOnly = false, hi
     return rows
   }, [seats])
 
-  const rowKeys = Object.keys(grid).sort()
+  const rowKeys = Object.keys(grid).sort((a, b) =>
+    String(a).localeCompare(String(b), undefined, { numeric: true })
+  )
   const allBenches = [...new Set(seats.map((s) => s.bench))].sort((a, b) => a - b)
 
   const legendItems = [
