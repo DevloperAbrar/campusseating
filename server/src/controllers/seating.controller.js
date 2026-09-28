@@ -11,12 +11,18 @@ const generateSeating = asyncHandler(async (req, res) => {
   });
   if (!shift) throw new ApiError(404, "Shift not found");
   if (shift.isPublished) throw new ApiError(403, "Shift is published — reset first");
-  if (!shift.studentIds?.length) throw new ApiError(400, "Resolve students first");
+  if (!shift.shiftRooms.length) throw new ApiError(400, "Add at least one room to this shift");
+
+  // Always use the CURRENT branch/year selection, never a stale stored list
+  const studentWhere = { collegeId: req.collegeId, isActive: true };
+  if (shift.selectedBranchIds?.length) studentWhere.branchId = { in: shift.selectedBranchIds };
+  if (shift.selectedYears?.length) studentWhere.year = { in: shift.selectedYears };
 
   const students = await prisma.student.findMany({
-    where: { id: { in: shift.studentIds }, isActive: true },
+    where: studentWhere,
     select: { id: true, enrollmentNo: true, branchId: true, year: true, gender: true, specialNeeds: true, name: true },
   });
+  if (!students.length) throw new ApiError(400, "No students match the selected branches and years");
 
   const roomIds = shift.shiftRooms.map((r) => r.roomId);
   const rooms = await prisma.room.findMany({ where: { id: { in: roomIds } } });
@@ -45,7 +51,15 @@ const generateSeating = asyncHandler(async (req, res) => {
     })),
   });
 
-  await prisma.shift.update({ where: { id: shift.id }, data: { planGenerated: true, planGeneratedAt: new Date() } });
+  await prisma.shift.update({
+    where: { id: shift.id },
+    data: {
+      planGenerated: true,
+      planGeneratedAt: new Date(),
+      studentIds: students.map((s) => s.id),
+      totalStudents: students.length,
+    },
+  });
 
   await prisma.activityLog.create({
     data: {

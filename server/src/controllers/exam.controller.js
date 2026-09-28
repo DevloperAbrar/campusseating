@@ -44,7 +44,7 @@ const updateExam = asyncHandler(async (req, res) => {
 const deleteExam = asyncHandler(async (req, res) => {
   const exam = await prisma.exam.findFirst({ where: { id: req.params.id, collegeId: req.collegeId } });
   if (!exam) throw new ApiError(404, "Exam not found");
-  if (exam.isLocked) throw new ApiError(403, "Exam is locked — cannot delete");
+  if (exam.isLocked) throw new ApiError(403, "Exam is locked, cannot delete");
 
   // Cascade delete shifts + assignments (Prisma handles via onDelete: Cascade in schema)
   await prisma.exam.delete({ where: { id: req.params.id } });
@@ -88,41 +88,75 @@ const createShift = asyncHandler(async (req, res) => {
   res.status(201).json(new ApiResponse(201, "Shift created", shift));
 });
 
+/**
+ * Works out which students belong to a shift from its CURRENT branch/year selection.
+ * `db` is either `prisma` or a transaction client, so it can be used in both places.
+ */
+const computeShiftStudents = async (db, shift, collegeId) => {
+  const where = { collegeId, isActive: true };
+  if (shift.selectedBranchIds?.length) where.branchId = { in: shift.selectedBranchIds };
+  if (shift.selectedYears?.length) where.year = { in: shift.selectedYears };
+
+  const students = await db.student.findMany({ where, select: { id: true } });
+  const shiftRooms = await db.shiftRoom.findMany({ where: { shiftId: shift.id } });
+  const totalSeats = shiftRooms.reduce((sum, r) => sum + (r.usableCapacity || 0), 0);
+
+  return {
+    studentIds: students.map((s) => s.id),
+    totalStudents: students.length,
+    totalAvailableSeats: totalSeats,
+  };
+};
+
 const updateShift = asyncHandler(async (req, res) => {
-  const shift = await prisma.shift.findFirst({ where: { id: req.params.shiftId, examId: req.params.examId, collegeId: req.collegeId } });
+  const shift = await prisma.shift.findFirst({
+    where: { id: req.params.shiftId, examId: req.params.examId, collegeId: req.collegeId },
+  });
   if (!shift) throw new ApiError(404, "Shift not found");
-  if (shift.isPublished) throw new ApiError(403, "Shift is published — unpublish first");
+  if (shift.isPublished) throw new ApiError(403, "Shift is published, unpublish first");
 
   const { name, startTime, endTime, selectedBranchIds, selectedYears, seatingRules, rooms } = req.body;
 
-  // Update shift fields
-  const updated = await prisma.shift.update({
-    where: { id: req.params.shiftId },
-    data: { name, startTime, endTime, selectedBranchIds, selectedYears, seatingRules },
-  });
+  await prisma.$transaction(async (tx) => {
+    const updated = await tx.shift.update({
+      where: { id: shift.id },
+      data: { name, startTime, endTime, selectedBranchIds, selectedYears, seatingRules },
+    });
 
-  // ✅ If rooms were sent, replace all shiftRooms
-  if (rooms && Array.isArray(rooms)) {
-    await prisma.shiftRoom.deleteMany({ where: { shiftId: shift.id } });
-    if (rooms.length > 0) {
-      await prisma.shiftRoom.createMany({
-        data: rooms.map((r) => ({
-          shiftId: shift.id,
-          roomId: r.room,
-          priority: r.priority || 0,
-          usableCapacity: r.usableCapacity || 0,
-        })),
-      });
+    // If rooms were sent, replace all shiftRooms
+    if (Array.isArray(rooms)) {
+      await tx.shiftRoom.deleteMany({ where: { shiftId: shift.id } });
+      if (rooms.length > 0) {
+        await tx.shiftRoom.createMany({
+          data: rooms.map((r) => ({
+            shiftId: shift.id,
+            roomId: r.room,
+            priority: r.priority || 0,
+            usableCapacity: r.usableCapacity || 0,
+          })),
+        });
+      }
     }
-  }
+
+    // Any edit can change who is in the shift or how they are seated.
+    // Refresh the student list and drop the old plan so nothing stale survives.
+    const resolved = await computeShiftStudents(tx, updated, req.collegeId);
+    await tx.seatingAssignment.deleteMany({ where: { shiftId: shift.id } });
+    await tx.shift.update({
+      where: { id: shift.id },
+      data: { ...resolved, planGenerated: false, planGeneratedAt: null },
+    });
+  });
 
   // Return updated shift with rooms included
   const result = await prisma.shift.findFirst({
     where: { id: shift.id },
-    include: { shiftRooms: { include: { room: { select: { name: true, building: true, usableCapacity: true } } } } },
+    include: {
+      shiftRooms: { include: { room: { select: { name: true, building: true, usableCapacity: true } } } },
+    },
   });
 
-  res.json(new ApiResponse(200, "Shift updated", result));
+  res.json(new ApiResponse(200, "Shift updated. Regenerate the seating plan.", result));
 });
 
 const deleteShift = asyncHandler(async (req, res) => {
@@ -135,28 +169,23 @@ const deleteShift = asyncHandler(async (req, res) => {
 });
 
 const resolveStudents = asyncHandler(async (req, res) => {
-  const shift = await prisma.shift.findFirst({ where: { id: req.params.shiftId, examId: req.params.examId, collegeId: req.collegeId } });
+  const shift = await prisma.shift.findFirst({
+    where: { id: req.params.shiftId, examId: req.params.examId, collegeId: req.collegeId },
+  });
   if (!shift) throw new ApiError(404, "Shift not found");
 
-  const where = { collegeId: req.collegeId, isActive: true };
-  if (shift.selectedBranchIds?.length) where.branchId = { in: shift.selectedBranchIds };
-  if (shift.selectedYears?.length) where.year = { in: shift.selectedYears };
+  const resolved = await computeShiftStudents(prisma, shift, req.collegeId);
 
-  const students = await prisma.student.findMany({ where, select: { id: true } });
+  // Always save studentIds, the warning is informational only
+  await prisma.shift.update({ where: { id: shift.id }, data: resolved });
 
-  const shiftRooms = await prisma.shiftRoom.findMany({ where: { shiftId: shift.id } });
-  const totalSeats = shiftRooms.reduce((sum, r) => sum + (r.usableCapacity || 0), 0);
+  const responseData = {
+    totalStudents: resolved.totalStudents,
+    totalAvailableSeats: resolved.totalAvailableSeats,
+  };
 
-  // ✅ ALWAYS save studentIds — warning is informational only, not a blocker
-  await prisma.shift.update({
-    where: { id: shift.id },
-    data: { studentIds: students.map((s) => s.id), totalStudents: students.length, totalAvailableSeats: totalSeats },
-  });
-
-  const responseData = { totalStudents: students.length, totalAvailableSeats: totalSeats };
-
-  if (students.length > totalSeats) {
-    responseData.warning = `${students.length - totalSeats} students cannot be seated — not enough room capacity`;
+  if (resolved.totalStudents > resolved.totalAvailableSeats) {
+    responseData.warning = `${resolved.totalStudents - resolved.totalAvailableSeats} students cannot be seated, not enough room capacity`;
     return res.json(new ApiResponse(200, "Warning: More students than seats", responseData));
   }
 
