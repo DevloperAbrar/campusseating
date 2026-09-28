@@ -45,7 +45,6 @@ const generateSeating = asyncHandler(async (req, res) => {
     })),
   });
 
-  await prisma.room.updateMany({ where: { id: { in: roomIds } }, data: { isLocked: true } });
   await prisma.shift.update({ where: { id: shift.id }, data: { planGenerated: true, planGeneratedAt: new Date() } });
 
   await prisma.activityLog.create({
