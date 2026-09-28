@@ -3,25 +3,42 @@ import { ArrowLeftRight, ChevronDown, ChevronRight } from 'lucide-react'
 import { Badge } from '../ui/Loader'
 import Button from '../ui/Button'
 import { seatingAPI } from '../../api'
+import { yearLabel } from '../../utils'
 import toast from 'react-hot-toast'
 
 function StudentPill({ assignment, selected, onSelect }) {
   const s = assignment.student
+  const name = s?.name || 'Unknown student'
+  const enrollmentNo = s?.enrollmentNo || ''
+  const branch = s?.branch?.code || ''
+  const year = s?.year ? yearLabel(s.year) : ''
+  const meta = [branch, year].filter(Boolean).join(' · ')
+
   return (
     <button
+      type="button"
       onClick={() => onSelect(assignment)}
       className={`
-        text-left text-xs px-2 py-1.5 rounded-lg border transition-all
+        w-full text-left px-3 py-2 rounded-lg border transition-all
         ${selected
           ? 'bg-amber-100 border-amber-400 ring-1 ring-amber-400'
           : 'bg-white border-gray-200 hover:border-navy hover:bg-blue-50'
         }
       `}
-      title={`${s?.name} (${s?.branch?.code}) — ${assignment.seatId}`}
+      title={`${name}\n${enrollmentNo}\n${meta}\nSeat ${assignment.seatId}`}
     >
-      <span className="font-medium truncate block max-w-[80px]">{s?.name?.split(' ')[0]}</span>
-      <span className="text-gray-400 block">{assignment.seatId}</span>
-      <span className="text-blue-600">{s?.branch?.code}</span>
+      <div className="flex items-start justify-between gap-2">
+        <span className="font-semibold text-[13px] text-gray-800 leading-tight break-words">
+          {name}
+        </span>
+        <span className="text-[10px] font-mono bg-gray-100 text-gray-600 rounded px-1.5 py-0.5 shrink-0">
+          {assignment.seatId}
+        </span>
+      </div>
+      {enrollmentNo && (
+        <div className="mt-1 font-mono text-[11px] text-gray-600">{enrollmentNo}</div>
+      )}
+      {meta && <div className="mt-0.5 text-[11px] text-blue-600">{meta}</div>}
     </button>
   )
 }
@@ -55,26 +72,29 @@ function RoomBlock({ roomData, examId, shiftId, onSwapped, swapState, onSelectFo
               if (!rows[a.row]) rows[a.row] = []
               rows[a.row].push(a)
             })
-            return Object.entries(rows).sort(([a], [b]) => a.localeCompare(b)).map(([row, rowAssignments]) => (
-              <div key={row} className="mb-3">
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="text-xs font-bold text-gray-500 w-6">Row {row}</span>
-                  <div className="h-px flex-1 bg-gray-100" />
+            // Natural sort so rows read R1, R2 ... R10 (not R1, R10, R2)
+            return Object.entries(rows)
+              .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
+              .map(([row, rowAssignments]) => (
+                <div key={row} className="mb-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-xs font-bold text-gray-500 whitespace-nowrap">Row {row}</span>
+                    <div className="h-px flex-1 bg-gray-100" />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-2">
+                    {[...rowAssignments]
+                      .sort((a, b) => a.bench - b.bench || a.position.localeCompare(b.position))
+                      .map((a) => (
+                        <StudentPill
+                          key={a.id}
+                          assignment={a}
+                          selected={swapState?.selected?.id === a.id}
+                          onSelect={onSelectForSwap}
+                        />
+                      ))}
+                  </div>
                 </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {rowAssignments
-                    .sort((a, b) => a.bench - b.bench || a.position.localeCompare(b.position))
-                    .map((a) => (
-                      <StudentPill
-                        key={a.id}
-                        assignment={a}
-                        selected={swapState?.selected?.id === a.id}
-                        onSelect={onSelectForSwap}
-                      />
-                    ))}
-                </div>
-              </div>
-            ))
+              ))
           })()}
         </div>
       )}
@@ -88,7 +108,7 @@ export default function SeatingPreview({ data = [], examId, shiftId, onRefresh }
   const handleSelectForSwap = (assignment) => {
     if (!swapState.selected) {
       setSwapState({ selected: assignment, loading: false })
-      toast('Now click another student to swap seats', { icon: '🔄' })
+      toast('Now click another student to swap seats', { icon: '🔁' })
       return
     }
 
@@ -133,7 +153,9 @@ export default function SeatingPreview({ data = [], examId, shiftId, onRefresh }
           <div className="flex items-center gap-2 text-sm text-amber-700">
             <ArrowLeftRight size={15} />
             <span>
-              Swapping: <strong>{swapState.selected.student?.name}</strong> ({swapState.selected.seatId}). Click another student to complete swap.
+              Swapping: <strong>{swapState.selected.student?.name}</strong>
+              {swapState.selected.student?.enrollmentNo && ` (${swapState.selected.student.enrollmentNo})`}
+              {' '}– seat {swapState.selected.seatId}. Click another student to complete swap.
             </span>
           </div>
           <Button size="sm" variant="secondary" onClick={cancelSwap}>Cancel</Button>
