@@ -21,10 +21,12 @@ function ShiftForm({ defaultValues, rooms, branches, onSubmit, loading, onCancel
     defaultValues: defaultValues || {
       seatingRules: {
         branchSeparationMode: 'strict',
-        rollNumberOrder: true,
+        rollNumberOrder: 'asc',
         genderSeparation: 'none',
         consecutivePairing: false,
-        gapSeating: false,
+        gapSeating: 'false',
+        yearSeparation: false,
+        yearBench: false,
         branchPairs: [],
       },
     },

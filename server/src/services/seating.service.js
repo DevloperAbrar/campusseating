@@ -1,16 +1,20 @@
 /**
- * CampusSeating — Core Seating Algorithm (v2)
- * Pure function — zero DB calls. Controller feeds data, this returns assignments.
+ * CampusSeating - Core Seating Algorithm (v3)
+ * Pure function, zero DB calls. Controller feeds data, this returns assignments.
  *
- * Guarantees (verified by an automated stress test over every rule combination):
+ * Year modes (pick one in the shift form):
+ *  - none   : years are treated like any other student (they mix freely)
+ *  - rooms  : yearSeparation  -> every year gets its own block of rooms
+ *  - bench  : yearBench       -> every bench holds one student of each year
+ *                                (lowest year on the left seat, next year on the right seat)
+ *
+ * Guarantees:
  *  - a student is seated at most once, a seat is used at most once
  *  - blocked seats are never used; reserved seats only go to special-needs students
- *    (unless the room would otherwise be too small for everybody)
- *  - rows are filled in natural order: R1, R2, ... R9, R10, R11 (never R1, R10, R2)
- *  - gap seating is respected and is included in capacity calculations
- *  - year separation and gender separation work together (year first, then gender)
- *  - strict branch separation uses "pick the k largest different branches per bench",
- *    which finds a valid arrangement whenever one exists
+ *    (unless the rooms would otherwise be too small for everybody)
+ *  - rows are filled in natural order: R1, R2, ... R9, R10, R11
+ *  - gap seating is respected and included in capacity calculations
+ *  - year, gender, branch pairing, roll order, spread/pack and fill direction work together
  *  - nobody is dropped because of a soft preference: leftovers go through a final pass
  */
 
@@ -21,25 +25,39 @@ const { shuffleArray } = require("../utils/helpers");
 const nat = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true });
 const seatKey = (roomId, seatId) => `${roomId}::${seatId}`;
 const benchKey = (roomId, row, bench) => `${roomId}|${row}|${bench}`;
+const yearKey = (s) => (s.year == null ? "unknown" : String(s.year));
+
+// Old shifts stored some rules in other shapes (true, "true", "ascending"...). Read them all.
+function normRoll(v) {
+  if (v === true || v === "true" || v === "asc" || v === "ascending") return "asc";
+  if (v === "desc" || v === "descending") return "desc";
+  return false;
+}
+function normGap(v) {
+  if (v === "side" || v === "row") return v;
+  return false;
+}
 
 function normalizeRules(rules) {
   const r = rules || {};
+  const yearBench = r.yearBench === true || r.yearBench === "true";
   return {
     strict: r.branchSeparationMode === "strict",
     gender: r.genderSeparation === "rooms" || r.genderSeparation === "rows" ? r.genderSeparation : "none",
-    roll: r.rollNumberOrder === "asc" || r.rollNumberOrder === "desc" ? r.rollNumberOrder : false,
-    gap: r.gapSeating === "side" || r.gapSeating === "row" ? r.gapSeating : false,
+    roll: normRoll(r.rollNumberOrder),
+    gap: normGap(r.gapSeating),
     spread: r.roomFillStrategy === "spread",
     back: r.fillDirection === "back",
-    yearSeparation: !!r.yearSeparation,
-    pairing: !!r.consecutivePairing,
-    autoPair: !!r.autoPair,
+    yearBench,
+    yearSeparation: (r.yearSeparation === true || r.yearSeparation === "true") && !yearBench,
+    pairing: r.consecutivePairing === true || r.consecutivePairing === "true",
+    autoPair: r.autoPair === true || r.autoPair === "true",
     pairingMode: r.pairingMode === "block" ? "block" : "interleaved",
     branchPairs: Array.isArray(r.branchPairs) ? r.branchPairs : [],
   };
 }
 
-// Slot order inside a room: rows (front→back, or back→front), then bench, then seat.
+// Slot order inside a room: rows (front to back, or back to front), then bench, then seat.
 function slotComparator(R) {
   return (a, b) =>
     (R.back ? nat(b.row, a.row) : nat(a.row, b.row)) ||
@@ -55,11 +73,9 @@ function seatIndex(seat) {
 // ───────────────────────── seat pools ─────────────────────────
 
 /**
- * One pool per room. `slots` = every seat that may be used by the normal fill after the
- * gap-seating rule is applied. The gap rule is decided ONCE from the full room layout
- * (bench numbers), so it never shifts as seats get used.
- *   gap "row"  → only odd bench numbers (bench 1, 3, 5 …) are used
- *   gap "side" → only the first seat of every bench (left seat) is used
+ * One pool per room. `slots` = every seat the normal fill may use after the gap rule.
+ *   gap "row"  -> only odd bench numbers (bench 1, 3, 5 ...) are used
+ *   gap "side" -> only the first seat of every bench (left seat) is used
  */
 function buildPools(rooms, R) {
   const cmp = slotComparator(R);
@@ -115,7 +131,7 @@ function place(ctx, pool, slot, student) {
   ctx.seated.add(String(student._id));
 }
 
-// Groups consecutive free slots into physical benches (slots are already in fill order).
+// Groups free slots into physical benches (slots are already in fill order).
 function groupBenches(slots) {
   const map = new Map();
   for (const s of slots) {
@@ -151,10 +167,8 @@ const queuesLeft = (queues) => [...queues.values()].flat();
 // ───────────────────────── standard bench fill ─────────────────────────
 /**
  * Fills benches in order. For every bench it picks the k students from the k LARGEST
- * remaining branches (avoiding branches already sitting on that bench). This is the
- * classic optimal greedy: it never puts two students of the same branch on a bench
- * unless it is mathematically unavoidable.
- * Returns the students it could not seat (only when the pools run out of seats).
+ * remaining branches (avoiding branches already on that bench). Returns students it could
+ * not seat (only when the pools run out of seats).
  */
 function assignBenches(ctx, students, pools) {
   if (!students.length) return [];
@@ -212,6 +226,71 @@ function assignBenches(ctx, students, pools) {
   return queuesLeft(queues);
 }
 
+// ───────────────────────── year on the same bench ─────────────────────────
+/**
+ * Every bench gets one student per year: the lowest year on the first (left) seat, the next
+ * year on the second (right) seat, and so on. With gap "side" (one seat per bench) the years
+ * alternate from bench to bench. If a year runs out, the other years fill the free seats.
+ * Inside a year the roll-number order (or shuffle) is kept; with strict branch mode a
+ * student whose branch is already on the bench is skipped when someone else is available.
+ */
+function assignYearBenches(ctx, students, pools) {
+  if (!students.length) return [];
+  const R = ctx.R;
+
+  const byYear = new Map();
+  for (const s of students) {
+    const k = yearKey(s);
+    if (!byYear.has(k)) byYear.set(k, []);
+    byYear.get(k).push(s);
+  }
+  const keys = [...byYear.keys()].sort(nat);
+  const lists = new Map(keys.map((k) => [k, queuesLeft(buildQueues(byYear.get(k), R))]));
+
+  const take = (key, occupied) => {
+    const own = lists.get(key);
+    const list = own.length
+      ? own
+      : keys.map((k) => lists.get(k)).filter((l) => l.length).sort((a, b) => b.length - a.length)[0];
+    if (!list) return null;
+    let idx = 0;
+    if (R.strict) {
+      const found = list.findIndex((s) => !occupied.has(String(s.branch)));
+      if (found > 0) idx = found;
+    }
+    return list.splice(idx, 1)[0];
+  };
+
+  let remaining = students.length;
+  let benchCounter = 0;
+
+  for (const pool of pools) {
+    if (!remaining) break;
+    let quota = pool.limit == null ? Infinity : pool.limit;
+
+    for (const bench of groupBenches(freeSlots(ctx, pool))) {
+      if (!remaining || quota <= 0) break;
+      const seats = bench.slice(0, Math.min(bench.length, quota, remaining));
+      const occupied = new Set(ctx.benchBranches.get(benchKey(pool.roomId, bench[0].row, bench[0].bench)) || []);
+      const offset = bench.length === 1 ? benchCounter : 0;
+      benchCounter++;
+
+      const yearsOnBench = new Set();
+      seats.forEach((slot, i) => {
+        const st = take(keys[(i + offset) % keys.length], occupied);
+        if (!st) return;
+        place(ctx, pool, slot, st);
+        occupied.add(String(st.branch));
+        yearsOnBench.add(yearKey(st));
+        remaining--;
+        quota--;
+      });
+      if (seats.length > 1 && yearsOnBench.size < 2) ctx.singleYearBenches++;
+    }
+  }
+  return keys.flatMap((k) => lists.get(k));
+}
+
 // ───────────────────────── branch pairing ─────────────────────────
 
 function resolvePairs(students, R) {
@@ -227,7 +306,7 @@ function resolvePairs(students, R) {
     for (let i = 0; i < left.length; i++) {
       if (right[i]) pairs.push([left[i][0], right[i][0]]);
     }
-    return pairs; // an odd branch out is seated by the normal fill (strict-safe)
+    return pairs;
   }
 
   const seen = new Set();
@@ -245,10 +324,7 @@ function resolvePairs(students, R) {
   return pairs;
 }
 
-/**
- * INTERLEAVED — rows cycle through the pairs: row 1 → pair A, row 2 → pair B, row 3 → pair A …
- * Inside a row: left seat = first branch of the pair, right seat = second branch.
- */
+/** INTERLEAVED: rows cycle through the pairs. Left seat = first branch, right seat = second. */
 function assignInterleaved(ctx, students, pools, pairs) {
   const R = ctx.R;
   const queues = buildQueues(students, R);
@@ -271,7 +347,7 @@ function assignInterleaved(ctx, students, pools, pairs) {
           const bi = (R.gap === "side" ? benchIdx : i) % pair.length;
           let q = queues.get(pair[bi]);
           if (!q || !q.length) {
-            if (R.strict) return; // leave for the strict-safe fallback fill
+            if (R.strict) return;
             q = pair.map((b) => queues.get(b)).find((x) => x && x.length);
             if (!q) return;
           }
@@ -283,15 +359,11 @@ function assignInterleaved(ctx, students, pools, pairs) {
   return queuesLeft(queues);
 }
 
-/**
- * BLOCK — every bench-position is a column running front→back. Pair 1 gets the first columns
- * (left column = branch A, right column = branch B, alternating), then pair 2, and so on.
- */
+/** BLOCK: every bench position is a column running front to back; pair 1 first, then pair 2. */
 function assignBlock(ctx, students, pools, pairs) {
   const R = ctx.R;
   const queues = buildQueues(students, R);
 
-  // column groups: one group per physical bench-number of a room
   const groups = [];
   for (const pool of pools) {
     const byBench = new Map();
@@ -340,9 +412,9 @@ function assignBlock(ctx, students, pools, pairs) {
   return queuesLeft(queues);
 }
 
-// ───────────────────────── grouping (year / gender) ─────────────────────────
+// ───────────────────────── grouping (year rooms / gender) ─────────────────────────
 
-/** Gives every group its own rooms, by need, in priority order (each later group keeps ≥1 room). */
+/** Gives every group its own rooms, by need, in priority order (each later group keeps at least 1 room). */
 function allocateByNeed(ctx, sizes, pools) {
   const caps = pools.map((p) => freeCount(ctx, p));
   let cursor = 0;
@@ -394,18 +466,15 @@ function planGroups(ctx, students, pools) {
   if (R.yearSeparation) {
     const years = new Map();
     for (const s of students) {
-      const k = s.year == null ? "unknown" : String(s.year);
+      const k = yearKey(s);
       if (!years.has(k)) years.set(k, []);
       years.get(k).push(s);
     }
     if (years.size > 1) {
       if (pools.length < 2) {
-        ctx.warnings.push("Year-wise room separation needs at least 2 rooms — students were seated together.");
+        ctx.warnings.push("Year-wise room separation needs at least 2 rooms. Students were seated together.");
       } else {
         const keys = [...years.keys()].sort(nat);
-        // Each year gets the smallest block of rooms that fits it. When gender separation is
-        // "rooms", a year needs one block for female and one for male students, so the block
-        // is sized for both.
         let cursor = 0;
         groups = keys.map((k, i) => {
           const list = years.get(k);
@@ -445,7 +514,7 @@ function planGroups(ctx, students, pools) {
         [fPools, oPools] = allocateByNeed(ctx, [female.length, other.length], g.pools);
       } else {
         if (R.gender === "rooms") {
-          ctx.warnings.push("Gender separation by rooms needs at least 2 rooms per group — separated by rows instead.");
+          ctx.warnings.push("Gender separation by rooms needs at least 2 rooms per group. Separated by rows instead.");
         }
         [fPools, oPools] = splitPoolsByRows(ctx, g.pools, female.length);
       }
@@ -483,6 +552,19 @@ function seatGroup(ctx, group) {
   let left = group.students;
   if (!left.length || !group.pools.length) return left;
 
+  const pools =
+    R.spread && !R.pairing ? withSpreadLimits(ctx, group.pools, left.length) : group.pools;
+
+  // Year on the same bench takes priority over branch pairing.
+  if (R.yearBench) {
+    const yearCount = new Set(left.map(yearKey)).size;
+    if (yearCount > 1) return assignYearBenches(ctx, left, pools);
+    if (!ctx.yearBenchWarned) {
+      ctx.yearBenchWarned = true;
+      ctx.warnings.push("Year on same bench is on, but only one year is in this group. Students were seated normally.");
+    }
+  }
+
   if (R.pairing) {
     const pairs = resolvePairs(left, R);
     if (pairs.length) {
@@ -491,14 +573,13 @@ function seatGroup(ctx, group) {
         : assignInterleaved(ctx, left, group.pools, pairs);
     } else if (!ctx.pairWarned) {
       ctx.pairWarned = true;
-      ctx.warnings.push("Branch pairing is on but no usable branch pair was found — students were seated without pairing.");
+      ctx.warnings.push("Branch pairing is on but no usable branch pair was found. Students were seated without pairing.");
     }
   }
 
   if (left.length) {
-    const pools =
-      R.spread && !R.pairing ? withSpreadLimits(ctx, group.pools, left.length) : group.pools;
-    left = assignBenches(ctx, left, pools);
+    const p2 = R.spread && !R.pairing ? pools : group.pools;
+    left = assignBenches(ctx, left, p2);
   }
   return left;
 }
@@ -517,8 +598,13 @@ function generateSeatingPlan(students, rooms, rules) {
     warnings: [],
     benchBranches: new Map(),
     forced: 0,
+    singleYearBenches: 0,
     multiBranch: new Set(students.map((s) => String(s.branch))).size > 1,
   };
+
+  if (R.yearBench && R.pairing) {
+    ctx.warnings.push("Year on same bench and Branch Pairing were both on. Year on same bench was used, pairing was ignored.");
+  }
 
   // Reserved seats are held back for special-needs students.
   for (const p of pools) for (const s of p.reserved) ctx.held.add(seatKey(p.roomId, s.seatId));
@@ -548,23 +634,24 @@ function generateSeatingPlan(students, rooms, rules) {
     if (!done) normal.push(st);
   }
 
-  // Unused reserved seats are only released when the room would otherwise be too small.
+  // Unused reserved seats are only released when the rooms would otherwise be too small.
   const totalFree = pools.reduce((n, p) => n + freeCount(ctx, p), 0);
   if (normal.length > totalFree) ctx.held.clear();
 
-  // capacity information (gap seating & blocked seats reduce it)
   const capacityNow = pools.reduce((n, p) => n + freeCount(ctx, p), 0);
   if (normal.length > capacityNow) {
     ctx.warnings.push(
       `Only ${capacityNow} usable seat(s) for ${normal.length} student(s)` +
-        (R.gap ? " — gap seating reduces capacity, add rooms or turn it off." : " — add more rooms or unblock seats.")
+        (R.gap ? ". Gap seating reduces capacity, add rooms or turn it off." : ". Add more rooms or unblock seats.")
     );
   }
 
-  // 2) year / gender groups, then seat every group
-  for (const group of planGroups(ctx, normal, pools)) seatGroup(ctx, group);
+  // 2) year-room / gender groups, then seat every group
+  for (const group of planGroups(ctx, normal, pools)) {
+    seatGroup(ctx, group);
+  }
 
-  // 3) final safety net — every student not yet seated goes to ANY free seat
+  // 3) final safety net: every student not yet seated goes to ANY free seat
   let leftover = students.filter((s) => !ctx.seated.has(String(s._id)));
   if (leftover.length) {
     const before = ctx.assignments.length;
@@ -581,15 +668,21 @@ function generateSeatingPlan(students, rooms, rules) {
     }
   }
 
+  if (ctx.singleYearBenches > 0) {
+    ctx.warnings.push(
+      `${ctx.singleYearBenches} bench(es) hold students of one year only, because the other year had fewer students.`
+    );
+  }
+
   if (ctx.forced > 0) {
     ctx.warnings.push(
-      `Strict branch separation could not be fully honoured on ${ctx.forced} bench(es) — one branch has more students than all other branches can pair with.`
+      `Strict branch separation could not be fully honoured on ${ctx.forced} bench(es), one branch has more students than all other branches can pair with.`
     );
   }
 
   const unassigned = students.filter((s) => !ctx.seated.has(String(s._id)));
   if (unassigned.length) {
-    ctx.warnings.push(`${unassigned.length} student(s) could not be seated — not enough usable seats in the selected rooms.`);
+    ctx.warnings.push(`${unassigned.length} student(s) could not be seated, not enough usable seats in the selected rooms.`);
   }
 
   return { assignments: ctx.assignments, unassigned, warnings: ctx.warnings };

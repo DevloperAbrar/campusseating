@@ -69,12 +69,12 @@ function TriToggle({ label, description, value, offLabel = 'Off', aLabel, bLabel
   )
 }
 
-// Binary radio option card
+// Radio option cards (2 or 3 options)
 function OptionCards({ label, tip, value, onChange, options }) {
   return (
     <div>
       <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-2">{label}</p>
-      <div className={`grid gap-2 grid-cols-${options.length}`}>
+      <div className={`grid gap-2 ${options.length === 3 ? 'grid-cols-3' : options.length === 2 ? 'grid-cols-2' : 'grid-cols-1'}`}>
         {options.map((opt) => (
           <label key={opt.value}
             className={`flex flex-col gap-1 p-3 rounded-lg border-2 cursor-pointer transition-colors ${value === opt.value ? 'border-navy bg-white' : 'border-gray-200 bg-white hover:border-gray-300'}`}>
@@ -105,13 +105,37 @@ const DEFAULT_RULES = {
   roomFillStrategy: 'pack',
   fillDirection: 'front',
   yearSeparation: false,
+  yearBench: false,
+}
+
+const bid = (b) => b?.id ?? b?._id ?? ''
+
+// Older shifts saved some rules as true/false. Convert them to the values this form understands.
+function normalizeRules(v) {
+  const r = { ...DEFAULT_RULES, ...(v || {}) }
+  r.rollNumberOrder =
+    r.rollNumberOrder === true || r.rollNumberOrder === 'true' || r.rollNumberOrder === 'asc' ? 'asc'
+    : r.rollNumberOrder === 'desc' ? 'desc'
+    : 'false'
+  r.gapSeating = r.gapSeating === 'side' || r.gapSeating === 'row' ? r.gapSeating : 'false'
+  r.genderSeparation = ['rows', 'rooms'].includes(r.genderSeparation) ? r.genderSeparation : 'none'
+  r.branchSeparationMode = r.branchSeparationMode === 'relaxed' ? 'relaxed' : 'strict'
+  r.roomFillStrategy = r.roomFillStrategy === 'spread' ? 'spread' : 'pack'
+  r.fillDirection = r.fillDirection === 'back' ? 'back' : 'front'
+  r.pairingMode = r.pairingMode === 'block' ? 'block' : 'interleaved'
+  r.yearBench = r.yearBench === true
+  r.yearSeparation = r.yearSeparation === true && !r.yearBench
+  r.consecutivePairing = r.consecutivePairing === true
+  r.autoPair = r.autoPair === true
+  r.branchPairs = Array.isArray(r.branchPairs) ? r.branchPairs : []
+  return r
 }
 
 export default function AlgorithmConfig({ value, onChange, branches = [] }) {
-  const [rules, setRules] = useState(() => ({ ...DEFAULT_RULES, ...(value || {}) }))
+  const [rules, setRules] = useState(() => normalizeRules(value))
 
   useEffect(() => {
-    if (value) setRules({ ...DEFAULT_RULES, ...value })
+    if (value) setRules(normalizeRules(value))
   }, [JSON.stringify(value)]) // eslint-disable-line
 
   const update = (patch) => {
@@ -122,7 +146,7 @@ export default function AlgorithmConfig({ value, onChange, branches = [] }) {
 
   const addPair = () => update({
     branchPairs: [...rules.branchPairs,
-      { positions: ['L', 'R'], branches: [branches[0]?._id || '', branches[1]?._id || ''] }]
+      { positions: ['L', 'R'], branches: [bid(branches[0]), bid(branches[1])] }]
   })
 
   const removePair = (i) => update({ branchPairs: rules.branchPairs.filter((_, idx) => idx !== i) })
@@ -179,8 +203,8 @@ export default function AlgorithmConfig({ value, onChange, branches = [] }) {
         aValue="side" bValue="row"
         onChange={(v) => update({ gapSeating: v })}
       />
-      {rules.gapSeating === 'side' && <p className="text-xs text-gray-400 ml-12 -mt-3">Uses only left seat of each bench — right seat stays empty.</p>}
-      {rules.gapSeating === 'row'  && <p className="text-xs text-gray-400 ml-12 -mt-3">Uses bench 1, skips bench 2, uses bench 3… entire alternating benches stay empty.</p>}
+      {rules.gapSeating === 'side' && <p className="text-xs text-gray-400 ml-12 -mt-3">Uses only left seat of each bench, right seat stays empty.</p>}
+      {rules.gapSeating === 'row'  && <p className="text-xs text-gray-400 ml-12 -mt-3">Uses bench 1, skips bench 2, uses bench 3. Entire alternating benches stay empty.</p>}
 
       {/* ── Room Fill Strategy ──────────────────────────────────── */}
       <OptionCards
@@ -205,12 +229,22 @@ export default function AlgorithmConfig({ value, onChange, branches = [] }) {
         ]}
       />
 
-      {/* ── Year Separation ─────────────────────────────────────── */}
-      <Toggle
-        label="Year-wise Room Separation"
-        description="If multiple years are in this shift, assign each year to its own block of rooms."
-        checked={rules.yearSeparation}
-        onChange={(v) => update({ yearSeparation: v })}
+      {/* ── Year Seating ────────────────────────────────────────── */}
+      <OptionCards
+        label="Year Seating"
+        value={rules.yearBench ? 'bench' : rules.yearSeparation ? 'rooms' : 'none'}
+        onChange={(v) => update({
+          yearBench: v === 'bench',
+          yearSeparation: v === 'rooms',
+          consecutivePairing: v === 'bench' ? false : rules.consecutivePairing,
+          autoPair: v === 'bench' ? false : rules.autoPair,
+        })}
+        options={[
+          { value: 'none',  label: 'Mixed',          desc: 'Years are not considered. They sit wherever the order puts them.' },
+          { value: 'rooms', label: 'Separate rooms', desc: 'Each year gets its own block of rooms.' },
+          { value: 'bench', label: 'Same bench',     desc: 'Every bench has one student of each year. Lowest year on the left seat, next year on the right.' },
+        ]}
+        tip="Same bench works with 2 or more years in the shift. If one year has fewer students, the other year fills the remaining seats."
       />
 
       {/* ── Consecutive Branch Pairing ──────────────────────────── */}
@@ -218,8 +252,12 @@ export default function AlgorithmConfig({ value, onChange, branches = [] }) {
         label="Consecutive Branch Pairing"
         description="Assign specific branch pairs to alternate bench positions."
         checked={rules.consecutivePairing}
+        disabled={rules.yearBench}
         onChange={(v) => update({ consecutivePairing: v, autoPair: v ? rules.autoPair : false })}
       />
+      {rules.yearBench && (
+        <p className="text-xs text-gray-400 ml-12 -mt-3">Not available while Year Seating is set to Same bench.</p>
+      )}
 
       {rules.consecutivePairing && (
         <div className="border border-gray-200 rounded-xl p-4 space-y-4 bg-gray-50">
@@ -235,7 +273,7 @@ export default function AlgorithmConfig({ value, onChange, branches = [] }) {
             <div>
               <p className="text-sm font-semibold text-gray-800">Auto-Pair Branches</p>
               <p className="text-xs text-gray-400 mt-0.5">
-                Automatically pairs branches by balancing student counts — largest branch paired with smallest for even column fill. No manual selection needed.
+                Automatically pairs branches by balancing student counts, largest branch paired with smallest for even column fill. No manual selection needed.
               </p>
             </div>
           </div>
@@ -251,7 +289,7 @@ export default function AlgorithmConfig({ value, onChange, branches = [] }) {
             ]}
           />
 
-          {/* Manual pairs — hidden when autoPair is on */}
+          {/* Manual pairs, hidden when autoPair is on */}
           {!rules.autoPair && (
             <div>
               <div className="flex items-center justify-between mb-2">
@@ -278,7 +316,7 @@ export default function AlgorithmConfig({ value, onChange, branches = [] }) {
                             updatePair(i, { branches: b })
                           }}>
                           <option value="">Select branch…</option>
-                          {branches.map((b) => <option key={b._id} value={b._id}>{b.code} — {b.name}</option>)}
+                          {branches.map((b) => <option key={bid(b)} value={bid(b)}>{b.code} - {b.name}</option>)}
                         </select>
                       </div>
                     ))}
