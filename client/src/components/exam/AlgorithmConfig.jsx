@@ -104,6 +104,7 @@ const DEFAULT_RULES = {
   sameRowSameBranch: false,
   roomFillStrategy: 'pack',
   fillDirection: 'front',
+  fillOrder: 'row',
   yearSeparation: false,
   yearBench: false,
 }
@@ -122,6 +123,7 @@ function normalizeRules(v) {
   r.branchSeparationMode = r.branchSeparationMode === 'relaxed' ? 'relaxed' : 'strict'
   r.roomFillStrategy = r.roomFillStrategy === 'spread' ? 'spread' : 'pack'
   r.fillDirection = r.fillDirection === 'back' ? 'back' : 'front'
+  r.fillOrder = r.fillOrder === 'column' ? 'column' : 'row'
   r.pairingMode = r.pairingMode === 'block' ? 'block' : 'interleaved'
   r.yearBench = r.yearBench === true
   r.yearSeparation = r.yearSeparation === true && !r.yearBench
@@ -227,6 +229,18 @@ export default function AlgorithmConfig({ value, onChange, branches = [] }) {
           { value: 'front', label: 'Front → Back', desc: 'Start seating from row A (front of room).' },
           { value: 'back',  label: 'Back → Front', desc: 'Start seating from the last row (back of room).' },
         ]}
+      />
+
+      {/* ── Seating Order ───────────────────────────────────────── */}
+      <OptionCards
+        label="Seating Order"
+        value={rules.fillOrder}
+        onChange={(v) => update({ fillOrder: v })}
+        options={[
+          { value: 'row',    label: 'Row-wise (left to right)',    desc: 'Fill Row 1 from the first bench to the last, then Row 2, then Row 3...' },
+          { value: 'column', label: 'Column-wise (top to bottom)', desc: 'Fill Bench 1 down through all rows, then move to Bench 2 and continue.' },
+        ]}
+        tip={rules.consecutivePairing && !rules.yearBench ? 'Branch Pairing decides its own order, so this option is ignored while pairing is on.' : undefined}
       />
 
       {/* ── Year Seating ────────────────────────────────────────── */}

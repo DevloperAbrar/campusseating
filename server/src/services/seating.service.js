@@ -13,6 +13,7 @@
  *  - blocked seats are never used; reserved seats only go to special-needs students
  *    (unless the rooms would otherwise be too small for everybody)
  *  - rows are filled in natural order: R1, R2, ... R9, R10, R11
+ *  - seating order: row by row (left to right) or bench column by column (top to bottom)
  *  - gap seating is respected and included in capacity calculations
  *  - year, gender, branch pairing, roll order, spread/pack and fill direction work together
  *  - nobody is dropped because of a soft preference: leftovers go through a final pass
@@ -48,6 +49,7 @@ function normalizeRules(rules) {
     gap: normGap(r.gapSeating),
     spread: r.roomFillStrategy === "spread",
     back: r.fillDirection === "back",
+    column: r.fillOrder === "column",
     yearBench,
     yearSeparation: (r.yearSeparation === true || r.yearSeparation === "true") && !yearBench,
     pairing: r.consecutivePairing === true || r.consecutivePairing === "true",
@@ -57,12 +59,16 @@ function normalizeRules(rules) {
   };
 }
 
-// Slot order inside a room: rows (front to back, or back to front), then bench, then seat.
+// Slot order inside a room.
+//  row order    (default): row by row, left to right  -> R1B1, R1B2, R1B3 ... then R2B1, R2B2 ...
+//  column order          : bench column top to bottom  -> R1B1, R2B1, R3B1 ... then R1B2, R2B2 ...
+// fillDirection "back" reverses the row direction in both orders.
 function slotComparator(R) {
-  return (a, b) =>
-    (R.back ? nat(b.row, a.row) : nat(a.row, b.row)) ||
-    Number(a.bench) - Number(b.bench) ||
-    nat(a.seatId, b.seatId);
+  const rowCmp = (a, b) => (R.back ? nat(b.row, a.row) : nat(a.row, b.row));
+  const benchCmp = (a, b) => Number(a.bench) - Number(b.bench);
+  return R.column
+    ? (a, b) => benchCmp(a, b) || rowCmp(a, b) || nat(a.seatId, b.seatId)
+    : (a, b) => rowCmp(a, b) || benchCmp(a, b) || nat(a.seatId, b.seatId);
 }
 
 function seatIndex(seat) {
@@ -453,6 +459,8 @@ function splitPoolsByRows(ctx, pools, nFemale) {
         need -= rows.get(row).length;
       } else m.push(...rows.get(row));
     }
+    f.sort(ctx.cmp);
+    m.sort(ctx.cmp);
     if (f.length) fPools.push({ ...pool, slots: f, limit: null });
     if (m.length) mPools.push({ ...pool, slots: m, limit: null });
   }
@@ -591,6 +599,7 @@ function generateSeatingPlan(students, rooms, rules) {
   const pools = buildPools(rooms, R);
   const ctx = {
     R,
+    cmp: slotComparator(R),
     used: new Set(),
     held: new Set(),
     seated: new Set(),
